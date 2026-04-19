@@ -1,0 +1,31 @@
+{
+  "id": "rb-001",
+  "title": "CrashLoopBackOff — Pod Crash Loop Recovery",
+  "summary": "A pod is repeatedly crashing and restarting. Kubernetes marks it CrashLoopBackOff after several failed starts.",
+  "trigger_signals": [
+    "alert: KubePodCrashLooping",
+    "log: 'Back-off restarting failed container'",
+    "metric: kube_pod_container_status_restarts_total rate > 0.1/min"
+  ],
+  "likely_causes": [
+    "Bad configuration (missing env var, wrong secret key)",
+    "OOM kill (container hitting memory limit)",
+    "Application startup failure (bad image, missing dependency)",
+    "Recent deployment introduced a bug"
+  ],
+  "diagnostic_steps": [
+    "kubectl describe pod <pod> -n <namespace>",
+    "kubectl logs <pod> --previous -n <namespace>",
+    "kubectl get events -n <namespace> --field-selector involvedObject.name=<pod>"
+  ],
+  "action": "rollout_restart",
+  "action_params": {
+    "note": "Restart only if root cause is transient (startup race). If config error, fix config first."
+  },
+  "escalate_if": [
+    "Restart count > 10 in 15 minutes",
+    "OOMKilled reason in pod status",
+    "Image pull error"
+  ],
+  "tags": ["crash-loop", "pod", "restart", "deployment"]
+}

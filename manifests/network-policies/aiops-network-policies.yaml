@@ -1,0 +1,215 @@
+# manifests/network-policies/aiops-network-policies.yaml
+# Zero-trust ingress/egress for every AIOps component.
+# Default deny-all then explicitly allow required paths only.
+
+---
+# ── Default deny all in aiops namespace ──────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: aiops
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── Collector: accept Alertmanager webhooks, talk to Loki + executor ──────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-collector-policy
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app: aiops-collector
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept webhook from Alertmanager (monitoring namespace)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Accept health checks from within aiops namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aiops
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Loki (monitoring namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 3100
+    # Executor (rollout history metadata)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: aiops-executor
+      ports:
+        - protocol: TCP
+          port: 8002
+    # DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+# ── Agent: read Redis queue, call collector API for context ──────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-agent-policy
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app: aiops-agent
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept API calls from UI and within aiops
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aiops
+      ports:
+        - protocol: TCP
+          port: 8001
+  egress:
+    # Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # OpenAI / external LLM HTTPS — allow all egress on 443
+    - ports:
+        - protocol: TCP
+          port: 443
+    # DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+# ── Executor: K8s API + ArgoCD + Redis ───────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-executor-policy
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app: aiops-executor
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept approval + manual execute requests from UI/ops
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aiops
+      ports:
+        - protocol: TCP
+          port: 8002
+    # Collector metadata calls
+    - from:
+        - podSelector:
+            matchLabels:
+              app: aiops-collector
+      ports:
+        - protocol: TCP
+          port: 8002
+  egress:
+    # Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Kubernetes API server
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # ArgoCD server
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argocd
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 8080
+    # DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+# ── Redis: only aiops services may connect ───────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-policy
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: aiops-collector
+        - podSelector:
+            matchLabels:
+              app: aiops-agent
+        - podSelector:
+            matchLabels:
+              app: aiops-executor
+      ports:
+        - protocol: TCP
+          port: 6379

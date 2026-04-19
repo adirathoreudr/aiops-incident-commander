@@ -1,0 +1,91 @@
+# infra/manifests/argocd-application.yaml
+# ArgoCD Application CRD — syncs aiops-platform.yaml from Git.
+# Apply once after ArgoCD is installed:
+#   kubectl apply -f infra/manifests/argocd-application.yaml -n argocd
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aiops-incident-commander
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: aiops-incident-commander
+    app.kubernetes.io/part-of: aiops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  # Cascade delete — removing this Application deletes all managed resources
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/your-org/aiops-incident-commander.git
+    targetRevision: main
+    path: manifests
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: aiops
+
+  syncPolicy:
+    automated:
+      prune: true       # remove resources deleted from Git
+      selfHeal: true    # revert manual kubectl changes
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Health checks — ArgoCD watches these resources
+  ignoreDifferences:
+    # Ignore image tag diffs managed by CI/CD kubectl set image
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/template/spec/containers/0/image
+
+---
+# ArgoCD RBAC — allow aiops-executor SA to trigger rollbacks via API
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-aiops-invoker
+  namespace: argocd
+  annotations:
+    description: "Used by aiops-executor to trigger ArgoCD rollbacks"
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-application-rollback
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "patch", "update"]
+    resourceNames: ["aiops-incident-commander"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-aiops-rollback
+  namespace: argocd
+subjects:
+  - kind: ServiceAccount
+    name: aiops-executor
+    namespace: aiops
+roleRef:
+  kind: Role
+  name: argocd-application-rollback
+  apiGroup: rbac.authorization.k8s.io

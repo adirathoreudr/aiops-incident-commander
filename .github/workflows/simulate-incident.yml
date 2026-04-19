@@ -1,0 +1,119 @@
+# .github/workflows/simulate-incident.yml
+# Manual workflow to inject a synthetic incident for demo purposes.
+# Trigger via GitHub Actions UI or gh CLI:
+#   gh workflow run simulate-incident.yml -f scenario=crashloop
+
+name: Simulate Incident
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Incident scenario to simulate"
+        required: true
+        default: crashloop
+        type: choice
+        options:
+          - crashloop
+          - oom_kill
+          - high_latency
+          - deployment_regression
+          - node_pressure
+      namespace:
+        description: "Target namespace"
+        required: false
+        default: staging
+      collector_url:
+        description: "Collector webhook URL"
+        required: false
+        default: "https://your-collector-url/webhook/simulate"
+
+jobs:
+  simulate:
+    name: Inject ${{ inputs.scenario }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inject ${{ inputs.scenario }} incident
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+          NAMESPACE: ${{ inputs.namespace }}
+          COLLECTOR_URL: ${{ inputs.collector_url }}
+        run: |
+          case "$SCENARIO" in
+            crashloop)
+              PAYLOAD='{
+                "title": "CrashLoopBackOff — payments-api [CI simulation]",
+                "alertname": "KubePodCrashLooping",
+                "severity": "critical",
+                "namespace": "'"$NAMESPACE"'",
+                "service": "payments-api",
+                "deployment": "payments-api",
+                "pod": "payments-api-7d9f84-xk2pq",
+                "image_tag": "payments-api:v2.4.0-sim"
+              }'
+              ;;
+            oom_kill)
+              PAYLOAD='{
+                "title": "OOMKilled — order-service pods [CI simulation]",
+                "alertname": "KubeContainerOOMKilled",
+                "severity": "high",
+                "namespace": "'"$NAMESPACE"'",
+                "service": "order-service",
+                "deployment": "order-service",
+                "image_tag": "order-service:v3.1.2-sim"
+              }'
+              ;;
+            high_latency)
+              PAYLOAD='{
+                "title": "High p95 latency — user-service [CI simulation]",
+                "alertname": "HighResponseTime",
+                "severity": "high",
+                "namespace": "'"$NAMESPACE"'",
+                "service": "user-service",
+                "deployment": "user-service",
+                "image_tag": "user-service:v1.8.4-sim"
+              }'
+              ;;
+            deployment_regression)
+              PAYLOAD='{
+                "title": "Deployment regression — api-gateway [CI simulation]",
+                "alertname": "HighErrorRate",
+                "severity": "high",
+                "namespace": "'"$NAMESPACE"'",
+                "service": "api-gateway",
+                "deployment": "api-gateway",
+                "image_tag": "api-gateway:v5.2.0-sim"
+              }'
+              ;;
+            node_pressure)
+              PAYLOAD='{
+                "title": "NodeMemoryPressure — worker-node [CI simulation]",
+                "alertname": "KubeNodeMemoryPressure",
+                "severity": "high",
+                "namespace": "kube-system",
+                "service": null,
+                "deployment": null,
+                "pod": "ip-10-0-2-87"
+              }'
+              ;;
+          esac
+
+          echo "Injecting scenario: $SCENARIO"
+          echo "Payload: $PAYLOAD"
+
+          HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "$COLLECTOR_URL" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          echo "Response: $(cat /tmp/response.json)"
+          echo "HTTP status: $HTTP_STATUS"
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error::Simulation failed with HTTP $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo "✓ Incident injected successfully"
+          INCIDENT_ID=$(cat /tmp/response.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('incident_id',''))")
+          echo "Incident ID: $INCIDENT_ID"

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+ui/.next/
+ui/out/
+ui/.vercel/
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/.terraform.lock.hcl
+infra/terraform/plan.tfplan
+
+# Secrets — NEVER commit these
+.env
+*.pem
+*.key
+kubeconfig
+*_rsa
+*_ecdsa
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Docker
+*.tar
+
+# Logs
+*.log
+logs/

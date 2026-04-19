@@ -1,0 +1,33 @@
+{
+  "id": "rb-004",
+  "title": "Deployment Regression — Rollback to Last Known Good",
+  "summary": "A recent deployment introduced a regression. Error rate increased or service stopped responding after the rollout.",
+  "trigger_signals": [
+    "alert: HighErrorRate after recent deployment",
+    "metric: increase in HTTP 5xx rate correlated with rollout event",
+    "log: new exception type appearing after image change",
+    "ArgoCD sync event within 30 minutes of incident start"
+  ],
+  "likely_causes": [
+    "New image version contains a bug",
+    "Database migration not backward compatible",
+    "Config change introduced bad environment variable",
+    "Dependency version bump broke integration"
+  ],
+  "diagnostic_steps": [
+    "Confirm rollout timestamp vs incident start: kubectl rollout history deployment/<n>",
+    "Compare error rate before/after rollout in Grafana",
+    "Check new image tag logs for new exception patterns"
+  ],
+  "action": "argocd_rollback",
+  "action_params": {
+    "note": "Roll back ArgoCD app to previous revision. Always requires human approval.",
+    "always_require_approval": true
+  },
+  "escalate_if": [
+    "Database schema migration was applied — rollback may cause data issues",
+    "Multiple services affected — may be infrastructure-level",
+    "Rollback candidate also had known issues"
+  ],
+  "tags": ["deployment", "regression", "rollback", "argocd", "error-rate"]
+}

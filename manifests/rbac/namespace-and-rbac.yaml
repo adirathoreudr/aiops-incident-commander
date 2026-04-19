@@ -1,0 +1,133 @@
+# manifests/rbac/namespace-and-rbac.yaml
+# Creates aiops namespace and least-privilege RBAC for each service.
+# The agent and executor get only the permissions they actually need.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aiops
+  labels:
+    app.kubernetes.io/managed-by: aiops-incident-commander
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+
+---
+# ── ServiceAccounts ────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aiops-collector
+  namespace: aiops
+  annotations:
+    description: "AIOps alert collector — read-only observability access"
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aiops-agent
+  namespace: aiops
+  annotations:
+    eks.amazonaws.com/role-arn: ""   # Set by Terraform output agent_iam_role_arn
+    description: "AIOps reasoning agent — read incidents, no cluster write"
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aiops-executor
+  namespace: aiops
+  annotations:
+    description: "AIOps executor — scoped write for restart/scale only"
+
+---
+# ── ClusterRole: read K8s events + pods (collector) ──────────────────────
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-collector-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "nodes", "namespaces", "events", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aiops-collector-reader
+subjects:
+  - kind: ServiceAccount
+    name: aiops-collector
+    namespace: aiops
+roleRef:
+  kind: ClusterRole
+  name: aiops-collector-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ── ClusterRole: rollout history reader (executor meta) ───────────────────
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-executor-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "nodes", "namespaces", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aiops-executor-writer
+subjects:
+  - kind: ServiceAccount
+    name: aiops-executor
+    namespace: aiops
+roleRef:
+  kind: ClusterRole
+  name: aiops-executor-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ── Role: agent read incidents from Redis (namespace-scoped) ──────────────
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aiops-agent-role
+  namespace: aiops
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get"]
+    resourceNames: ["aiops-agent-config"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aiops-agent-role
+  namespace: aiops
+subjects:
+  - kind: ServiceAccount
+    name: aiops-agent
+    namespace: aiops
+roleRef:
+  kind: Role
+  name: aiops-agent-role
+  apiGroup: rbac.authorization.k8s.io

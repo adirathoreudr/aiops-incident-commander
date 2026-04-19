@@ -1,0 +1,33 @@
+{
+  "id": "rb-002",
+  "title": "OOMKilled — Container Memory Limit Exceeded",
+  "summary": "Container was killed by the kernel OOM (Out of Memory) killer because it exceeded its memory limit.",
+  "trigger_signals": [
+    "alert: KubeContainerOOMKilled",
+    "pod status reason: OOMKilled",
+    "metric: container_memory_working_set_bytes near limits",
+    "log: 'signal: killed' or 'java.lang.OutOfMemoryError'"
+  ],
+  "likely_causes": [
+    "Memory limit set too low for the workload",
+    "Memory leak in the application",
+    "Sudden traffic spike causing higher memory usage",
+    "Incorrect JVM heap configuration"
+  ],
+  "diagnostic_steps": [
+    "kubectl describe pod <pod> -n <namespace> | grep -A5 'Last State'",
+    "Check container_memory_working_set_bytes in Grafana over 24h",
+    "Check recent deployments for memory limit changes"
+  ],
+  "action": "scale_up",
+  "action_params": {
+    "replicas_increase": 2,
+    "note": "Scale up to distribute load. Also consider increasing memory limits in deployment spec."
+  },
+  "escalate_if": [
+    "Memory limits already set high (>2Gi) and still OOMKilling",
+    "Multiple pods across different nodes OOMKilling simultaneously",
+    "Memory usage growing unbounded (leak pattern)"
+  ],
+  "tags": ["oom", "memory", "kill", "scale", "limits"]
+}

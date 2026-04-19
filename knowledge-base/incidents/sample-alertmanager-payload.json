@@ -1,0 +1,57 @@
+{
+  "description": "Sample Alertmanager webhook payload for testing the collector endpoint",
+  "endpoint": "POST /webhook/alertmanager",
+  "payload": {
+    "version": "4",
+    "groupKey": "{}:{alertname=\"KubePodCrashLooping\"}",
+    "status": "firing",
+    "receiver": "aiops-webhook",
+    "groupLabels": {
+      "alertname": "KubePodCrashLooping"
+    },
+    "commonLabels": {
+      "alertname": "KubePodCrashLooping",
+      "namespace": "staging",
+      "severity": "critical"
+    },
+    "commonAnnotations": {
+      "summary": "Pod is crash looping",
+      "description": "Pod payments-api-6b9f8d-xk2pq is restarting frequently"
+    },
+    "alerts": [
+      {
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodCrashLooping",
+          "namespace": "staging",
+          "pod": "payments-api-6b9f8d-xk2pq",
+          "deployment": "payments-api",
+          "app": "payments-api",
+          "service": "payments-api",
+          "severity": "critical",
+          "container": "payments-api"
+        },
+        "annotations": {
+          "summary": "Pod payments-api-6b9f8d-xk2pq is crash looping",
+          "description": "Pod payments-api-6b9f8d-xk2pq in namespace staging has been restarting 5 times in the last 15 minutes."
+        },
+        "startsAt": "2026-04-19T10:00:00Z",
+        "endsAt": "0001-01-01T00:00:00Z",
+        "generatorURL": "http://prometheus:9090/graph?g0.expr=rate(kube_pod_container_status_restarts_total[15m])>0"
+      }
+    ]
+  },
+  "simulate_endpoint": {
+    "endpoint": "POST /webhook/simulate",
+    "payload": {
+      "title": "CrashLoopBackOff in payments-api",
+      "alertname": "KubePodCrashLooping",
+      "severity": "critical",
+      "namespace": "staging",
+      "service": "payments-api",
+      "deployment": "payments-api",
+      "pod": "payments-api-6b9f8d-xk2pq",
+      "image_tag": "payments-api:v2.3.2"
+    }
+  }
+}

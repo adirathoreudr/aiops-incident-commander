@@ -1,0 +1,32 @@
+{
+  "id": "rb-005",
+  "title": "Node Pressure — Memory or Disk Pressure on Worker Node",
+  "summary": "A Kubernetes worker node is reporting MemoryPressure or DiskPressure condition. Pods may be evicted.",
+  "trigger_signals": [
+    "alert: KubeNodeNotReady",
+    "alert: KubeNodeMemoryPressure",
+    "node condition: MemoryPressure=True or DiskPressure=True",
+    "pod status: Evicted"
+  ],
+  "likely_causes": [
+    "Node running too many high-memory pods",
+    "Log accumulation filling /var/log disk",
+    "Docker layer cache consuming disk space",
+    "Memory leak in DaemonSet process"
+  ],
+  "diagnostic_steps": [
+    "kubectl describe node <node> | grep -A10 Conditions",
+    "kubectl get pods --all-namespaces --field-selector spec.nodeName=<node>",
+    "Check disk usage: kubectl debug node/<node> -- df -h"
+  ],
+  "action": "notify_only",
+  "action_params": {
+    "note": "Node issues cannot be resolved by pod-level actions. Notify ops to drain and investigate node."
+  },
+  "escalate_if": [
+    "Multiple nodes showing pressure simultaneously",
+    "Cluster autoscaler not provisioning new nodes",
+    "Critical system pods being evicted"
+  ],
+  "tags": ["node", "memory-pressure", "disk-pressure", "eviction", "capacity"]
+}

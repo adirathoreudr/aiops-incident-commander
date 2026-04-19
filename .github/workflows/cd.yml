@@ -1,0 +1,151 @@
+# .github/workflows/cd.yml
+# Continuous deployment — triggers after CI passes on main.
+# Deploys to EKS via kubectl + ArgoCD image update.
+
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false   # never cancel an in-flight deploy
+
+jobs:
+
+  # ── Deploy to EKS ───────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: tag
+        run: echo "IMAGE_TAG=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ secrets.EKS_CLUSTER_NAME }} \
+            --region ${{ secrets.AWS_REGION }}
+
+      - name: Apply RBAC + NetworkPolicies
+        run: |
+          kubectl apply -f manifests/rbac/namespace-and-rbac.yaml
+          kubectl apply -f manifests/network-policies/aiops-network-policies.yaml
+
+      - name: Apply Prometheus rules
+        run: |
+          kubectl apply -f manifests/monitoring/prometheus-rules.yaml
+          kubectl apply -f manifests/monitoring/alertmanager-config.yaml
+
+      - name: Update image tags in platform manifest
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.IMAGE_TAG }}
+        run: |
+          sed -i "s|REPLACE_WITH_ECR_URL|${ECR_REGISTRY}|g" manifests/aiops-platform.yaml
+          # Patch each deployment image individually
+          kubectl set image deployment/aiops-collector \
+            collector=${ECR_REGISTRY}/aiops-incident-commander/collector:${IMAGE_TAG} \
+            -n aiops
+          kubectl set image deployment/aiops-agent \
+            agent=${ECR_REGISTRY}/aiops-incident-commander/agent:${IMAGE_TAG} \
+            -n aiops
+          kubectl set image deployment/aiops-executor \
+            executor=${ECR_REGISTRY}/aiops-incident-commander/executor:${IMAGE_TAG} \
+            -n aiops
+
+      - name: Apply platform manifests (first deploy)
+        run: |
+          kubectl apply -f manifests/aiops-platform.yaml
+
+      - name: Wait for rollouts
+        run: |
+          kubectl rollout status deployment/aiops-collector -n aiops --timeout=300s
+          kubectl rollout status deployment/aiops-agent     -n aiops --timeout=300s
+          kubectl rollout status deployment/aiops-executor  -n aiops --timeout=300s
+
+      - name: Smoke test — healthz endpoints
+        run: |
+          kubectl run smoke-test --image=curlimages/curl:8.8.0 \
+            --restart=Never --rm -it -n aiops \
+            --command -- sh -c "
+              curl -sf http://aiops-collector:8000/healthz &&
+              curl -sf http://aiops-agent:8001/healthz &&
+              curl -sf http://aiops-executor:8002/healthz &&
+              echo 'All health checks passed'
+            "
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Deployment failed — check pod logs:"
+          kubectl get pods -n aiops
+          kubectl describe pods -n aiops | tail -60
+
+  # ── Deploy UI to Vercel ─────────────────────────────────────────────────────
+  deploy-ui:
+    name: Deploy UI → Vercel
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    defaults:
+      run:
+        working-directory: ui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build for Vercel
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        id: vercel-deploy
+        run: |
+          URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "DEPLOYMENT_URL=$URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed to: $URL"
+
+      - name: Comment deployment URL on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🚀 UI deployed to Vercel: ${{ steps.vercel-deploy.outputs.DEPLOYMENT_URL }}`
+            })

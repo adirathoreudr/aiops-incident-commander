@@ -1,0 +1,155 @@
+# docker-compose.yml
+# Full local development stack — no AWS required.
+# Spins up: Redis, Prometheus, Loki, Alertmanager, Grafana,
+#           collector, agent, executor
+# Usage: docker compose up -d
+
+version: "3.9"
+
+networks:
+  aiops:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  redis-data:
+
+services:
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks: [aiops]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Prometheus ─────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./infra/manifests/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [aiops]
+
+  # ── Alertmanager ───────────────────────────────────────────────────────────
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.external-url=http://localhost:9093
+    volumes:
+      - ./infra/manifests/alertmanager-local.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    networks: [aiops]
+
+  # ── Loki ───────────────────────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:3.0.0
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./infra/manifests/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    networks: [aiops]
+
+  # ── Grafana ────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.0.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_SECURITY_ADMIN_PASSWORD: "aiops"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/manifests/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    ports:
+      - "3000:3000"
+    networks: [aiops]
+    depends_on: [prometheus, loki]
+
+  # ── Collector ──────────────────────────────────────────────────────────────
+  collector:
+    build:
+      context: ./collector
+      dockerfile: Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379
+      LOKI_URL: http://loki:3100
+      K8S_API_URL: http://executor:8002
+      AGENT_URL: http://agent:8001
+      DEDUP_WINDOW_SECONDS: "120"
+    ports:
+      - "8000:8000"
+    networks: [aiops]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Agent ──────────────────────────────────────────────────────────────────
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379
+      COLLECTOR_URL: http://collector:8000
+      EXECUTOR_URL: http://executor:8002
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      LLM_MODEL: "gpt-4o-mini"
+      LLM_TEMPERATURE: "0.1"
+      AUTO_EXECUTE_THRESHOLD: "0.75"
+      USE_EMBEDDINGS: "true"
+      RUNBOOKS_PATH: /app/knowledge-base/runbooks
+      INCIDENTS_PATH: /app/knowledge-base/incidents
+    volumes:
+      - ./knowledge-base:/app/knowledge-base:ro
+    ports:
+      - "8001:8001"
+    networks: [aiops]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Executor ───────────────────────────────────────────────────────────────
+  executor:
+    build:
+      context: ./executor
+      dockerfile: Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379
+      IN_CLUSTER: "false"
+      ARGOCD_SERVER: "${ARGOCD_SERVER:-http://argocd-server:8080}"
+      ARGOCD_TOKEN: "${ARGOCD_TOKEN:-}"
+      BLOCKED_NAMESPACES: "kube-system,kube-public,cert-manager"
+      HIGH_RISK_NAMESPACES: "production,prod"
+      MIN_CONFIDENCE_AUTO: "0.75"
+    volumes:
+      # Mount kubeconfig for local dev
+      - "${HOME}/.kube:/home/appuser/.kube:ro"
+    ports:
+      - "8002:8002"
+    networks: [aiops]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped

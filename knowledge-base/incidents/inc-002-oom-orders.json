@@ -1,0 +1,23 @@
+{
+  "id": "inc-002",
+  "title": "OOMKilled — order-service pods killed during Black Friday traffic spike",
+  "severity": "high",
+  "namespace": "orders",
+  "service": "order-service",
+  "deployment": "order-service",
+  "incident_type": "oom_kill",
+  "probable_root_cause": "Traffic spike 4x above baseline caused order-service memory usage to exceed 512Mi limit. Kubernetes OOM killer terminated pods. 2 of 3 replicas were killed within 3 minutes.",
+  "supporting_evidence": [
+    "Pod status: reason=OOMKilled for 2/3 pods",
+    "container_memory_working_set_bytes reached 511Mi (limit: 512Mi) before kill",
+    "HTTP RPS increased from 800 to 3200 at 09:00 UTC (Black Friday start)",
+    "No recent deployments — traffic-driven incident"
+  ],
+  "confidence_score": 0.92,
+  "recommended_action": "scale_up",
+  "resolved_by": "Scaled order-service from 3 to 8 replicas. Memory per pod dropped to ~180Mi. Also raised memory limit to 1Gi in follow-up PR.",
+  "resolution_time_minutes": 12,
+  "created_at": "2025-11-29T09:02:00Z",
+  "resolved_at": "2025-11-29T09:14:00Z",
+  "tags": ["oom", "memory", "scaling", "traffic-spike", "orders"]
+}

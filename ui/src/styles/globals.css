@@ -1,0 +1,181 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface-base:    #070709;
+  --surface-raised:  #0d0d10;
+  --surface-overlay: #121218;
+  --surface-border:  #1e1e28;
+  --surface-muted:   #2a2a35;
+
+  --amber:           #f59e0b;
+  --amber-dim:       #92400e;
+  --amber-glow:      rgba(245, 158, 11, 0.15);
+
+  --signal-critical: #ff3b3b;
+  --signal-high:     #ff6b35;
+  --signal-warning:  #f59e0b;
+  --signal-info:     #38bdf8;
+  --signal-ok:       #22c55e;
+  --signal-resolved: #4b5563;
+
+  --ink-primary:    #e8e4d9;
+  --ink-secondary:  #9b9585;
+  --ink-muted:      #5c5850;
+  --ink-accent:     #f59e0b;
+
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-display: 'Instrument Serif', serif;
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--surface-base);
+  color: var(--ink-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background: var(--surface-base);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Scanline overlay ─────────────────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(0, 0, 0, 0.04) 3px,
+    rgba(0, 0, 0, 0.04) 4px
+  );
+  z-index: 9999;
+}
+
+/* ── Grid background ──────────────────────────────────────────────────────── */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(30,30,40,0.5) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30,30,40,0.5) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ── Amber glow heading ───────────────────────────────────────────────────── */
+.text-glow-amber {
+  text-shadow:
+    0 0 20px rgba(245, 158, 11, 0.6),
+    0 0 40px rgba(245, 158, 11, 0.2);
+}
+
+/* ── CRT border style ─────────────────────────────────────────────────────── */
+.border-crt {
+  border: 1px solid var(--surface-border);
+  box-shadow:
+    inset 0 0 0 1px rgba(245, 158, 11, 0.04),
+    0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+/* ── Severity badge ───────────────────────────────────────────────────────── */
+.badge-critical { background: rgba(255,59,59,0.15);  color: #ff6b6b; border: 1px solid rgba(255,59,59,0.3); }
+.badge-high     { background: rgba(255,107,53,0.15); color: #ff8c5a; border: 1px solid rgba(255,107,53,0.3); }
+.badge-warning  { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+.badge-info     { background: rgba(56,189,248,0.12); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.25); }
+
+.status-open       { color: #ff6b6b; }
+.status-in_triage  { color: #fbbf24; }
+.status-remediating{ color: #38bdf8; }
+.status-resolved   { color: #4ade80; }
+.status-escalated  { color: #f472b6; }
+
+/* ── Monospace data cell ──────────────────────────────────────────────────── */
+.data-cell {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface-base); }
+::-webkit-scrollbar-thumb { background: var(--surface-muted); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--amber-dim); }
+
+/* ── Confidence bar ───────────────────────────────────────────────────────── */
+.confidence-bar {
+  height: 3px;
+  background: var(--surface-muted);
+  position: relative;
+  overflow: hidden;
+}
+.confidence-bar::after {
+  content: '';
+  position: absolute;
+  inset-y: 0;
+  left: 0;
+  background: linear-gradient(90deg, var(--amber) 0%, rgba(245,158,11,0.4) 100%);
+  width: var(--confidence, 0%);
+  transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Blinking cursor ──────────────────────────────────────────────────────── */
+.cursor::after {
+  content: '█';
+  animation: blink 1.1s step-end infinite;
+  color: var(--amber);
+  font-size: 0.85em;
+  margin-left: 2px;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* ── Pulse dot ────────────────────────────────────────────────────────────── */
+.pulse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse-ring 2s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 currentColor; }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* ── Hover glow on cards ──────────────────────────────────────────────────── */
+.card-hover {
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+.card-hover:hover {
+  border-color: rgba(245, 158, 11, 0.3) !important;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.1), 0 4px 24px rgba(0,0,0,0.4);
+}
+
+/* ── Number counter animation ─────────────────────────────────────────────── */
+.stat-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Log level colors ─────────────────────────────────────────────────────── */
+.log-fatal, .log-error { color: #ff6b6b; }
+.log-warn, .log-warning { color: #fbbf24; }
+.log-info  { color: #9b9585; }
+.log-debug { color: #5c5850; }

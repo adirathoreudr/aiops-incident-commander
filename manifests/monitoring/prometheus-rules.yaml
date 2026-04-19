@@ -1,0 +1,174 @@
+# manifests/monitoring/prometheus-rules.yaml
+# PrometheusRule CRD — alert rules that feed AIOps incident collector.
+# Install via kube-prometheus-stack or manually with kubectl apply.
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aiops-incident-rules
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack   # must match Prometheus operator selector
+    app: aiops-incident-commander
+spec:
+  groups:
+
+    # ── Pod / Container Health ──────────────────────────────────────────────
+    - name: aiops.pod.health
+      interval: 30s
+      rules:
+
+        - alert: KubePodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash looping"
+            description: >
+              Pod {{ $labels.pod }} in namespace {{ $labels.namespace }}
+              has restarted {{ $value | humanize }} times in the last 15 minutes.
+            runbook_url: "https://github.com/your-org/aiops-incident-commander/blob/main/knowledge-base/runbooks/rb-001-crashloop.json"
+
+        - alert: KubeContainerOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 0m
+          labels:
+            severity: high
+            team: platform
+          annotations:
+            summary: "Container {{ $labels.container }} OOMKilled in {{ $labels.namespace }}"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              (namespace {{ $labels.namespace }}) was killed due to OOM.
+            runbook_url: "https://github.com/your-org/aiops-incident-commander/blob/main/knowledge-base/runbooks/rb-002-oomkill.json"
+
+        - alert: KubePodNotReady
+          expr: |
+            sum by (namespace, pod) (
+              max by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown"})
+              * on (namespace, pod) kube_pod_info
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} not ready for 5 minutes"
+            description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been in Pending/Unknown state."
+
+        - alert: KubeDeploymentReplicasMismatch
+          expr: |
+            kube_deployment_spec_replicas != kube_deployment_status_available_replicas
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} replicas mismatch"
+            description: >
+              Deployment {{ $labels.deployment }} in {{ $labels.namespace }}
+              has {{ $value }} fewer available replicas than desired.
+
+    # ── Latency / Error Rate ────────────────────────────────────────────────
+    - name: aiops.application.slo
+      interval: 30s
+      rules:
+
+        - alert: HighErrorRate
+          expr: |
+            sum(rate(http_requests_total{status=~"5.."}[5m])) by (namespace, service, deployment)
+            /
+            sum(rate(http_requests_total[5m])) by (namespace, service, deployment)
+            > 0.05
+          for: 3m
+          labels:
+            severity: high
+          annotations:
+            summary: "High error rate on {{ $labels.service }}"
+            description: >
+              Service {{ $labels.service }} in {{ $labels.namespace }}
+              has a {{ $value | humanizePercentage }} error rate (threshold: 5%).
+            runbook_url: "https://github.com/your-org/aiops-incident-commander/blob/main/knowledge-base/runbooks/rb-004-deployment-regression.json"
+
+        - alert: HighResponseTime
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_seconds_bucket[5m])) by (le, namespace, service)
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High p95 latency on {{ $labels.service }}"
+            description: >
+              p95 latency for {{ $labels.service }} in {{ $labels.namespace }}
+              is {{ $value | humanizeDuration }} (threshold: 500ms).
+            runbook_url: "https://github.com/your-org/aiops-incident-commander/blob/main/knowledge-base/runbooks/rb-003-high-latency.json"
+
+    # ── Node Health ─────────────────────────────────────────────────────────
+    - name: aiops.node.health
+      interval: 60s
+      rules:
+
+        - alert: KubeNodeMemoryPressure
+          expr: kube_node_status_condition{condition="MemoryPressure",status="true"} == 1
+          for: 2m
+          labels:
+            severity: high
+          annotations:
+            summary: "Node {{ $labels.node }} has MemoryPressure"
+            description: "Node {{ $labels.node }} is reporting MemoryPressure condition. Pods may be evicted."
+            runbook_url: "https://github.com/your-org/aiops-incident-commander/blob/main/knowledge-base/runbooks/rb-005-node-pressure.json"
+
+        - alert: KubeNodeDiskPressure
+          expr: kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+          for: 2m
+          labels:
+            severity: high
+          annotations:
+            summary: "Node {{ $labels.node }} has DiskPressure"
+            description: "Node {{ $labels.node }} is reporting DiskPressure. Check disk usage."
+
+        - alert: KubeNodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node {{ $labels.node }} is NotReady"
+            description: "Node {{ $labels.node }} has been NotReady for 5 minutes."
+
+    # ── AIOps Platform Self-Monitoring ──────────────────────────────────────
+    - name: aiops.platform
+      interval: 60s
+      rules:
+
+        - alert: AIOpsCollectorDown
+          expr: up{job="aiops-collector"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "AIOps collector is down"
+            description: "The AIOps incident collector is not scraping. Alert ingestion is broken."
+
+        - alert: AIOpsAgentDown
+          expr: up{job="aiops-agent"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "AIOps agent is down"
+            description: "The AIOps reasoning agent is not running. Incidents will queue without analysis."
+
+        - alert: AIOpsQueueDepthHigh
+          expr: aiops_agent_queue_depth > 20
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "AIOps agent queue depth is high ({{ $value }})"
+            description: "More than 20 incidents are queued. Agent may be overloaded or stuck."

@@ -1,0 +1,23 @@
+{
+  "id": "inc-003",
+  "title": "High latency spike in user-service — p95 > 2.3s after v4.1.0 deploy",
+  "severity": "high",
+  "namespace": "users",
+  "service": "user-service",
+  "deployment": "user-service",
+  "incident_type": "high_latency",
+  "probable_root_cause": "v4.1.0 introduced a synchronous call to a new geolocation microservice without a timeout. When geolocation service was slow (cold start), all user-service requests queued behind it. p95 latency rose from 120ms to 2300ms.",
+  "supporting_evidence": [
+    "p95 latency crossed 500ms at 16:48 UTC — 6 minutes after v4.1.0 rollout at 16:42",
+    "Logs: 'waiting for geolocation response' appearing in every request trace",
+    "geolocation-service pod showed 0% CPU — cold start after scale-to-zero",
+    "Error rate remained low — requests completing but very slowly"
+  ],
+  "confidence_score": 0.88,
+  "recommended_action": "argocd_rollback",
+  "resolved_by": "ArgoCD rollback to v4.0.9. Latency recovered to baseline within 4 minutes. Follow-up: added 500ms timeout to geolocation call and pre-warm policy.",
+  "resolution_time_minutes": 15,
+  "created_at": "2025-12-03T16:48:00Z",
+  "resolved_at": "2025-12-03T17:03:00Z",
+  "tags": ["latency", "deployment", "rollback", "timeout", "users"]
+}

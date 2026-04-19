@@ -1,0 +1,22 @@
+{
+  "id": "inc-001",
+  "title": "CrashLoopBackOff in payments-api after v2.3.1 deploy",
+  "severity": "critical",
+  "namespace": "payments",
+  "service": "payments-api",
+  "deployment": "payments-api",
+  "incident_type": "crash_loop",
+  "probable_root_cause": "The v2.3.1 image introduced a missing STRIPE_WEBHOOK_SECRET environment variable reference. The application panicked on startup when the env var was not found. CrashLoopBackOff triggered after 3 failed restarts.",
+  "supporting_evidence": [
+    "Logs: 'FATAL: required env var STRIPE_WEBHOOK_SECRET not set'",
+    "Rollout event: payments-api image changed to v2.3.1 at 14:32 UTC",
+    "Alert: KubePodCrashLooping fired at 14:33 UTC (1 minute after deploy)"
+  ],
+  "confidence_score": 0.95,
+  "recommended_action": "rollout_restart",
+  "resolved_by": "Added STRIPE_WEBHOOK_SECRET to deployment env via Kubernetes secret. Triggered rollout restart. Service recovered in 90 seconds.",
+  "resolution_time_minutes": 8,
+  "created_at": "2025-11-14T14:33:00Z",
+  "resolved_at": "2025-11-14T14:41:00Z",
+  "tags": ["crash-loop", "env-var", "deployment", "payments"]
+}
