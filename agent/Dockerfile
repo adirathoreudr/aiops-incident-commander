@@ -31,7 +31,7 @@ RUN groupadd --gid 1000 appgroup \
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
-COPY --chown=appuser:appgroup . .
+COPY --chown=appuser:appgroup . /app/agent
 
 # Knowledge base mounted via ConfigMap at runtime
 RUN mkdir -p /app/knowledge-base/runbooks /app/knowledge-base/incidents
@@ -46,6 +46,5 @@ EXPOSE 8001
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", \
+CMD ["uvicorn", "agent.main:app", "--host", "0.0.0.0", "--port", "8001", \
      "--workers", "1", "--loop", "uvloop"]

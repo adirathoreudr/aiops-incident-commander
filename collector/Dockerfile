@@ -29,7 +29,7 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 
 # Copy source
-COPY --chown=appuser:appgroup . .
+COPY --chown=appuser:appgroup . /app/collector
 
 # Drop root
 USER appuser
@@ -44,5 +44,5 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", \
+CMD ["uvicorn", "collector.main:app", "--host", "0.0.0.0", "--port", "8000", \
      "--workers", "2", "--loop", "uvloop", "--http", "httptools"]

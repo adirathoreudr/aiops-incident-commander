@@ -24,7 +24,7 @@ RUN groupadd --gid 1000 appgroup \
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
-COPY --chown=appuser:appgroup . .
+COPY --chown=appuser:appgroup . /app/executor
 
 USER appuser
 
@@ -37,6 +37,5 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     IN_CLUSTER=true
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002", \
+CMD ["uvicorn", "executor.main:app", "--host", "0.0.0.0", "--port", "8002", \
      "--workers", "1", "--loop", "uvloop"]
