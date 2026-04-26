@@ -89,7 +89,7 @@ Imagine having a junior DevOps engineer who never sleeps. This AI agent monitors
 
 ## Architecture
 
-![Architecture Diagram](docs/architecture-diagram.png)
+![Architecture Diagram](./docs/architecture-diagram.png)
 
 ---
 
