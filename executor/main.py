@@ -12,40 +12,46 @@ FastAPI service that:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
-import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, generate_latest
 from pydantic import BaseModel
+import redis.asyncio as aioredis
 from starlette.responses import Response
 
-from .policy import PolicyEngine
 from .actions import ActionDispatcher
 from .health import HealthChecker
 from .meta import MetaRouter
+from .policy import PolicyEngine
 
 log = logging.getLogger("executor")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
 
-REDIS_URL     = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 POLL_INTERVAL = float(os.getenv("QUEUE_POLL_INTERVAL", "2.0"))
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
-actions_executed  = Counter("aiops_actions_executed_total", "Actions executed", ["action_type", "success"])
-actions_blocked   = Counter("aiops_actions_blocked_total", "Actions blocked by policy")
-execution_latency = Histogram("aiops_execution_duration_seconds", "Action execution latency")
+actions_executed = Counter(
+    "aiops_actions_executed_total", "Actions executed", ["action_type", "success"]
+)
+actions_blocked = Counter("aiops_actions_blocked_total", "Actions blocked by policy")
+execution_latency = Histogram(
+    "aiops_execution_duration_seconds", "Action execution latency"
+)
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 redis_client: aioredis.Redis | None = None
-worker_task:  asyncio.Task | None = None
+worker_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
@@ -65,11 +71,14 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+)
 app.include_router(MetaRouter, prefix="/meta", tags=["metadata"])
 
 
 # ── Approval models ───────────────────────────────────────────────────────────
+
 
 class ApprovalRequest(BaseModel):
     incident_id: str
@@ -87,6 +96,7 @@ class ManualActionRequest(BaseModel):
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/healthz")
 async def health():
@@ -111,27 +121,38 @@ async def approve_action(req: ApprovalRequest):
     incident = json.loads(raw)
 
     # Audit the approval decision
-    await _append_audit(req.incident_id, {
-        "ts":          datetime.now(timezone.utc).isoformat(),
-        "event_type":  "approval_decision",
-        "approved":    req.approved,
-        "approver":    req.approver,
-        "action_type": incident.get("recommended_action"),
-    })
+    await _append_audit(
+        req.incident_id,
+        {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event_type": "approval_decision",
+            "approved": req.approved,
+            "approver": req.approver,
+            "action_type": incident.get("recommended_action"),
+        },
+    )
 
     if req.approved:
         incident["requires_approval"] = False
         incident["approved_by"] = req.approver
         incident["approved_at"] = datetime.now(timezone.utc).isoformat()
         incident["status"] = "remediating"
-        await redis_client.setex(f"incident:{req.incident_id}", 3600, json.dumps(incident))
+        await redis_client.setex(
+            f"incident:{req.incident_id}", 3600, json.dumps(incident)
+        )
         await redis_client.lpush("executor:queue", req.incident_id)
-        log.info("Incident %s approved by %s — enqueued for execution", req.incident_id, req.approver)
+        log.info(
+            "Incident %s approved by %s — enqueued for execution",
+            req.incident_id,
+            req.approver,
+        )
         return {"status": "approved", "enqueued": True}
     else:
         incident["status"] = "escalated"
         incident["rejected_by"] = req.approver
-        await redis_client.setex(f"incident:{req.incident_id}", 3600, json.dumps(incident))
+        await redis_client.setex(
+            f"incident:{req.incident_id}", 3600, json.dumps(incident)
+        )
         log.info("Incident %s rejected by %s", req.incident_id, req.approver)
         return {"status": "rejected"}
 
@@ -142,7 +163,9 @@ async def manual_execute(req: ManualActionRequest):
     policy = PolicyEngine()
     dispatcher = ActionDispatcher()
 
-    allowed, reason = policy.check(req.action_type, req.namespace, req.deployment, confidence=1.0)
+    allowed, reason = policy.check(
+        req.action_type, req.namespace, req.deployment, confidence=1.0
+    )
     if not allowed:
         actions_blocked.inc()
         raise HTTPException(403, f"Policy blocked action: {reason}")
@@ -155,17 +178,22 @@ async def manual_execute(req: ManualActionRequest):
             replicas=req.replicas,
         )
 
-    await _append_audit(req.incident_id, {
-        "ts":          datetime.now(timezone.utc).isoformat(),
-        "event_type":  "action_executed",
-        "action_type": req.action_type,
-        "target":      f"{req.namespace}/{req.deployment}",
-        "actor":       req.approver,
-        "success":     result["success"],
-        "result":      result["message"],
-    })
+    await _append_audit(
+        req.incident_id,
+        {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event_type": "action_executed",
+            "action_type": req.action_type,
+            "target": f"{req.namespace}/{req.deployment}",
+            "actor": req.approver,
+            "success": result["success"],
+            "result": result["message"],
+        },
+    )
 
-    actions_executed.labels(action_type=req.action_type, success=str(result["success"])).inc()
+    actions_executed.labels(
+        action_type=req.action_type, success=str(result["success"])
+    ).inc()
     return result
 
 
@@ -177,10 +205,11 @@ async def get_audit(incident_id: str):
 
 # ── Worker ────────────────────────────────────────────────────────────────────
 
+
 async def executor_worker() -> None:
-    policy     = PolicyEngine()
+    policy = PolicyEngine()
     dispatcher = ActionDispatcher()
-    checker    = HealthChecker()
+    checker = HealthChecker()
 
     log.info("Executor worker started")
     while True:
@@ -196,22 +225,32 @@ async def executor_worker() -> None:
 
             incident = json.loads(raw)
             action_type = incident.get("recommended_action", "notify_only")
-            params      = incident.get("recommended_action_params", {})
-            namespace   = params.get("namespace") or incident.get("namespace", "default")
-            deployment  = params.get("deployment") or incident.get("deployment", "")
-            confidence  = incident.get("confidence_score", 0.0)
+            params = incident.get("recommended_action_params", {})
+            namespace = params.get("namespace") or incident.get("namespace", "default")
+            deployment = params.get("deployment") or incident.get("deployment", "")
+            confidence = incident.get("confidence_score", 0.0)
 
             # Final policy gate
-            allowed, reason = policy.check(action_type, namespace, deployment, confidence)
+            allowed, reason = policy.check(
+                action_type, namespace, deployment, confidence
+            )
             if not allowed:
                 actions_blocked.inc()
                 log.warning("Action blocked by policy for %s: %s", incident_id, reason)
                 incident["status"] = "escalated"
                 incident["policy_block_reason"] = reason
-                await redis_client.setex(f"incident:{incident_id}", 3600, json.dumps(incident))
+                await redis_client.setex(
+                    f"incident:{incident_id}", 3600, json.dumps(incident)
+                )
                 continue
 
-            log.info("Executing %s on %s/%s for incident %s", action_type, namespace, deployment, incident_id)
+            log.info(
+                "Executing %s on %s/%s for incident %s",
+                action_type,
+                namespace,
+                deployment,
+                incident_id,
+            )
 
             with execution_latency.time():
                 result = await dispatcher.execute(
@@ -221,7 +260,9 @@ async def executor_worker() -> None:
                     replicas=params.get("replicas"),
                 )
 
-            actions_executed.labels(action_type=action_type, success=str(result["success"])).inc()
+            actions_executed.labels(
+                action_type=action_type, success=str(result["success"])
+            ).inc()
 
             # Verify recovery
             if result["success"]:
@@ -233,27 +274,37 @@ async def executor_worker() -> None:
 
             # Persist result
             incident["last_action"] = {
-                "type":    action_type,
-                "result":  result["message"],
+                "type": action_type,
+                "result": result["message"],
                 "success": result["success"],
-                "ts":      datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(timezone.utc).isoformat(),
             }
-            await redis_client.setex(f"incident:{incident_id}", 3600, json.dumps(incident))
+            await redis_client.setex(
+                f"incident:{incident_id}", 3600, json.dumps(incident)
+            )
 
             # Audit
-            await _append_audit(incident_id, {
-                "ts":          datetime.now(timezone.utc).isoformat(),
-                "event_type":  "action_executed",
-                "action_type": action_type,
-                "target":      f"{namespace}/{deployment}",
-                "actor":       "executor",
-                "success":     result["success"],
-                "result":      result["message"],
-                "recovered":   result.get("recovered"),
-            })
+            await _append_audit(
+                incident_id,
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "event_type": "action_executed",
+                    "action_type": action_type,
+                    "target": f"{namespace}/{deployment}",
+                    "actor": "executor",
+                    "success": result["success"],
+                    "result": result["message"],
+                    "recovered": result.get("recovered"),
+                },
+            )
 
-            log.info("Incident %s → status=%s action=%s success=%s",
-                     incident_id, incident["status"], action_type, result["success"])
+            log.info(
+                "Incident %s → status=%s action=%s success=%s",
+                incident_id,
+                incident["status"],
+                action_type,
+                result["success"],
+            )
 
         except asyncio.CancelledError:
             break
@@ -264,9 +315,10 @@ async def executor_worker() -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 async def _append_audit(incident_id: str, entry: dict) -> None:
-    key  = f"audit:{incident_id}"
-    raw  = await redis_client.get(key)
+    key = f"audit:{incident_id}"
+    raw = await redis_client.get(key)
     log_ = json.loads(raw) if raw else []
     log_.append(entry)
     await redis_client.setex(key, 86400 * 30, json.dumps(log_))

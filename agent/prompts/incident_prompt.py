@@ -10,7 +10,6 @@ import json
 import re
 from typing import Any
 
-
 SYSTEM_PROMPT = """\
 You are a senior SRE incident analyst. Your role is to triage Kubernetes incidents
 using only the evidence provided — logs, metrics, alerts, and rollout history.
@@ -78,14 +77,16 @@ def build_human_prompt(
     # ── Alerts ────────────────────────────────────────────────────────────────
     parts.append("### ACTIVE ALERTS")
     for a in incident.get("alerts", [])[:5]:
-        parts.append(f"  - [{a.get('severity', '?')}] {a.get('alertname', '?')} (ns={a.get('namespace', '?')})")
+        parts.append(
+            f"  - [{a.get('severity', '?')}] {a.get('alertname', '?')} (ns={a.get('namespace', '?')})"
+        )
     parts.append("")
 
     # ── Logs ──────────────────────────────────────────────────────────────────
     parts.append("### RECENT LOGS (last 15 lines)")
     logs = incident.get("logs", [])
     for entry in logs[-15:]:
-        ts  = entry.get("timestamp", "")[:19] if entry.get("timestamp") else "?"
+        ts = entry.get("timestamp", "")[:19] if entry.get("timestamp") else "?"
         lvl = entry.get("level", "info").upper()
         msg = entry.get("message", "")[:300]
         parts.append(f"  [{ts}] [{lvl}] {msg}")
@@ -127,7 +128,9 @@ def build_human_prompt(
             parts.append("")
 
     parts.append("---")
-    parts.append("Analyse the above incident and respond with a valid JSON object matching the schema.")
+    parts.append(
+        "Analyse the above incident and respond with a valid JSON object matching the schema."
+    )
 
     return "\n".join(parts)
 

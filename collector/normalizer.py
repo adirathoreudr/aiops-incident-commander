@@ -6,8 +6,8 @@ Kubernetes rollout history from the executor's metadata API.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import logging
-from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import httpx
@@ -32,21 +32,35 @@ def normalize_alertmanager_payload(raw: dict[str, Any]) -> AlertLabel:
         deployment=labels.get("deployment") or labels.get("app"),
         node=labels.get("node") or labels.get("instance"),
         container=labels.get("container"),
-        extra={k: v for k, v in labels.items() if k not in {
-            "alertname", "namespace", "severity", "service", "app",
-            "pod", "deployment", "node", "instance", "container", "job"
-        }},
+        extra={
+            k: v
+            for k, v in labels.items()
+            if k
+            not in {
+                "alertname",
+                "namespace",
+                "severity",
+                "service",
+                "app",
+                "pod",
+                "deployment",
+                "node",
+                "instance",
+                "container",
+                "job",
+            }
+        },
     )
 
 
 def _parse_severity(raw: str) -> Severity:
     mapping = {
         "critical": Severity.CRITICAL,
-        "high":     Severity.HIGH,
-        "warning":  Severity.WARNING,
-        "warn":     Severity.WARNING,
-        "info":     Severity.INFO,
-        "none":     Severity.INFO,
+        "high": Severity.HIGH,
+        "warning": Severity.WARNING,
+        "warn": Severity.WARNING,
+        "info": Severity.INFO,
+        "none": Severity.INFO,
     }
     return mapping.get(raw.lower(), Severity.WARNING)
 
@@ -66,24 +80,31 @@ async def fetch_loki_logs(
     else:
         label_selector = f'{{namespace="{namespace}", app="{service}"}}'
 
-    end_ns   = int(datetime.now(timezone.utc).timestamp() * 1e9)
-    start_ns = int((datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)).timestamp() * 1e9)
+    end_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
+    start_ns = int(
+        (datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)).timestamp()
+        * 1e9
+    )
 
     params = {
         "query": label_selector,
         "start": str(start_ns),
-        "end":   str(end_ns),
+        "end": str(end_ns),
         "limit": str(MAX_LOG_LINES),
         "direction": "backward",
     }
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{loki_url}/loki/api/v1/query_range", params=params)
+            resp = await client.get(
+                f"{loki_url}/loki/api/v1/query_range", params=params
+            )
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:
-        log.warning("Loki query failed (namespace=%s service=%s): %s", namespace, service, e)
+        log.warning(
+            "Loki query failed (namespace=%s service=%s): %s", namespace, service, e
+        )
         return []
 
     entries: list[LogEntry] = []
@@ -92,12 +113,14 @@ async def fetch_loki_logs(
         for ts_nano, line in stream.get("values", []):
             ts = datetime.utcfromtimestamp(int(ts_nano) / 1e9)
             level = _infer_log_level(line, stream_labels)
-            entries.append(LogEntry(
-                timestamp=ts,
-                stream=stream_labels,
-                message=line,
-                level=level,
-            ))
+            entries.append(
+                LogEntry(
+                    timestamp=ts,
+                    stream=stream_labels,
+                    message=line,
+                    level=level,
+                )
+            )
 
     # Sort oldest-first, cap at MAX_LOG_LINES
     entries.sort(key=lambda e: e.timestamp)
@@ -138,20 +161,24 @@ async def fetch_k8s_rollout_history(
             resp.raise_for_status()
             raw = resp.json()
     except Exception as e:
-        log.warning("Rollout history fetch failed (%s/%s): %s", namespace, deployment, e)
+        log.warning(
+            "Rollout history fetch failed (%s/%s): %s", namespace, deployment, e
+        )
         return []
 
     events = []
     for item in raw.get("events", [])[:5]:
         try:
-            events.append(RolloutEvent(
-                deployment=item["deployment"],
-                namespace=item["namespace"],
-                image=item.get("image", "unknown"),
-                revision=item.get("revision", 0),
-                started_at=datetime.fromisoformat(item["started_at"]),
-                status=item.get("status", "unknown"),
-            ))
+            events.append(
+                RolloutEvent(
+                    deployment=item["deployment"],
+                    namespace=item["namespace"],
+                    image=item.get("image", "unknown"),
+                    revision=item.get("revision", 0),
+                    started_at=datetime.fromisoformat(item["started_at"]),
+                    status=item.get("status", "unknown"),
+                )
+            )
         except Exception:
             continue
     return events

@@ -13,14 +13,17 @@ import os
 from typing import Any
 
 import httpx
-from kubernetes import client as k8s_client, config as k8s_config
+from kubernetes import client as k8s_client
+from kubernetes import config as k8s_config
 from kubernetes.client.exceptions import ApiException
 
 log = logging.getLogger("executor.actions")
 
-ARGOCD_SERVER   = os.getenv("ARGOCD_SERVER", "http://argocd-server.argocd.svc.cluster.local")
-ARGOCD_TOKEN    = os.getenv("ARGOCD_TOKEN", "")
-IN_CLUSTER      = os.getenv("IN_CLUSTER", "true").lower() == "true"
+ARGOCD_SERVER = os.getenv(
+    "ARGOCD_SERVER", "http://argocd-server.argocd.svc.cluster.local"
+)
+ARGOCD_TOKEN = os.getenv("ARGOCD_TOKEN", "")
+IN_CLUSTER = os.getenv("IN_CLUSTER", "true").lower() == "true"
 
 _k8s_loaded = False
 
@@ -59,10 +62,10 @@ class ActionDispatcher:
     ) -> dict[str, Any]:
         dispatch = {
             "rollout_restart": self._rollout_restart,
-            "scale_up":        self._scale,
-            "scale_down":      self._scale,
+            "scale_up": self._scale,
+            "scale_down": self._scale,
             "argocd_rollback": self._argocd_rollback,
-            "notify_only":     self._notify_only,
+            "notify_only": self._notify_only,
         }
         fn = dispatch.get(action_type, self._unknown_action)
         return await fn(
@@ -82,12 +85,15 @@ class ActionDispatcher:
         try:
             apps_v1 = k8s_client.AppsV1Api()
             import time
+
             patch = {
                 "spec": {
                     "template": {
                         "metadata": {
                             "annotations": {
-                                "kubectl.kubernetes.io/restartedAt": str(int(time.time()))
+                                "kubectl.kubernetes.io/restartedAt": str(
+                                    int(time.time())
+                                )
                             }
                         }
                     }
@@ -110,12 +116,17 @@ class ActionDispatcher:
             log.exception(msg)
             return {"success": False, "message": msg, "action": "rollout_restart"}
 
-    async def _scale(self, namespace: str, deployment: str, replicas: int | None, **_) -> dict:
+    async def _scale(
+        self, namespace: str, deployment: str, replicas: int | None, **_
+    ) -> dict:
         """
         kubectl scale deployment/<name> --replicas=N -n <namespace>
         """
         if replicas is None:
-            return {"success": False, "message": "replicas parameter required for scale action"}
+            return {
+                "success": False,
+                "message": "replicas parameter required for scale action",
+            }
         try:
             apps_v1 = k8s_client.AppsV1Api()
             patch = {"spec": {"replicas": replicas}}
@@ -126,7 +137,12 @@ class ActionDispatcher:
             )
             msg = f"Scaled {namespace}/{deployment} to {replicas} replicas"
             log.info(msg)
-            return {"success": True, "message": msg, "action": "scale", "replicas": replicas}
+            return {
+                "success": True,
+                "message": msg,
+                "action": "scale",
+                "replicas": replicas,
+            }
         except ApiException as e:
             msg = f"Scale failed ({namespace}/{deployment}): {e.reason}"
             log.error(msg)
@@ -136,7 +152,9 @@ class ActionDispatcher:
             log.exception(msg)
             return {"success": False, "message": msg, "action": "scale"}
 
-    async def _argocd_rollback(self, namespace: str, deployment: str, argocd_app: str, **_) -> dict:
+    async def _argocd_rollback(
+        self, namespace: str, deployment: str, argocd_app: str, **_
+    ) -> dict:
         """
         Rolls back ArgoCD application to the previous history revision.
         Uses ArgoCD REST API: POST /api/v1/applications/{name}/rollback
@@ -147,11 +165,11 @@ class ActionDispatcher:
         try:
             headers = {
                 "Authorization": f"Bearer {ARGOCD_TOKEN}",
-                "Content-Type":  "application/json",
+                "Content-Type": "application/json",
             }
             # First, get app history to find last good revision
             async with httpx.AsyncClient(timeout=30.0, verify=False) as http:
-                hist_resp = await http.get(
+                await http.get(
                     f"{ARGOCD_SERVER}/api/v1/applications/{argocd_app}/resource-tree",
                     headers=headers,
                 )

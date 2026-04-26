@@ -7,36 +7,41 @@ Pops incidents from Redis queue, reasons over context, stores results.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
-import sys
-from contextlib import asynccontextmanager
 
-import redis.asyncio as aioredis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, generate_latest
+import redis.asyncio as aioredis
 from starlette.responses import Response
 
-from .reasoner import IncidentReasoner
 from .audit import AuditLogger
+from .reasoner import IncidentReasoner
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-REDIS_URL    = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 COLLECTOR_URL = os.getenv("COLLECTOR_URL", "http://aiops-collector:8000")
-EXECUTOR_URL  = os.getenv("EXECUTOR_URL", "http://aiops-executor:8002")
+EXECUTOR_URL = os.getenv("EXECUTOR_URL", "http://aiops-executor:8002")
 POLL_INTERVAL = float(os.getenv("QUEUE_POLL_INTERVAL", "2.0"))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
 log = logging.getLogger("agent")
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
-incidents_processed = Counter("aiops_agent_incidents_processed_total", "Incidents processed by agent")
-reasoning_errors    = Counter("aiops_agent_reasoning_errors_total", "Reasoning failures")
-reasoning_latency   = Histogram("aiops_agent_reasoning_seconds", "Agent reasoning latency")
+incidents_processed = Counter(
+    "aiops_agent_incidents_processed_total", "Incidents processed by agent"
+)
+reasoning_errors = Counter("aiops_agent_reasoning_errors_total", "Reasoning failures")
+reasoning_latency = Histogram(
+    "aiops_agent_reasoning_seconds", "Agent reasoning latency"
+)
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
@@ -61,10 +66,13 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/healthz")
 async def health():
@@ -94,10 +102,11 @@ async def get_audit(incident_id: str):
 
 # ── Queue worker ──────────────────────────────────────────────────────────────
 
+
 async def queue_worker() -> None:
     """Continuously pops incident IDs from Redis and processes them."""
     reasoner = IncidentReasoner()
-    auditor  = AuditLogger(redis_client)
+    auditor = AuditLogger(redis_client)
 
     log.info("Queue worker started")
     while True:
@@ -117,7 +126,9 @@ async def queue_worker() -> None:
                 result = await reasoner.reason(json.loads(raw))
 
             # Persist enriched incident back to Redis
-            await redis_client.setex(f"incident:{incident_id}", 3600, json.dumps(result))
+            await redis_client.setex(
+                f"incident:{incident_id}", 3600, json.dumps(result)
+            )
 
             # Store audit record
             await auditor.record(incident_id, result)
@@ -131,7 +142,11 @@ async def queue_worker() -> None:
                 await redis_client.lpush("executor:queue", incident_id)
                 log.info("Enqueued incident %s for auto-execution", incident_id)
             else:
-                log.info("Incident %s requires human approval (conf=%.2f)", incident_id, result.get("confidence_score", 0))
+                log.info(
+                    "Incident %s requires human approval (conf=%.2f)",
+                    incident_id,
+                    result.get("confidence_score", 0),
+                )
 
             incidents_processed.inc()
 

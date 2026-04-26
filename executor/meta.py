@@ -6,11 +6,12 @@ rollout history and by the UI to list current deployments.
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
+import logging
 
-from fastapi import APIRouter, HTTPException
-from kubernetes import client as k8s_client, config as k8s_config
+from fastapi import APIRouter
+from kubernetes import client as k8s_client
+from kubernetes import config as k8s_config
 
 log = logging.getLogger("executor.meta")
 
@@ -44,7 +45,9 @@ async def rollout_history(namespace: str = "default", deployment: str = ""):
         apps_v1 = k8s_client.AppsV1Api()
 
         if deployment:
-            dep = apps_v1.read_namespaced_deployment(name=deployment, namespace=namespace)
+            dep = apps_v1.read_namespaced_deployment(
+                name=deployment, namespace=namespace
+            )
             selector = dep.spec.selector.match_labels
             label_selector = ",".join(f"{k}={v}" for k, v in selector.items())
         else:
@@ -56,18 +59,32 @@ async def rollout_history(namespace: str = "default", deployment: str = ""):
         )
 
         events = []
-        for rs in sorted(rs_list.items, key=lambda x: x.metadata.creation_timestamp or datetime.min, reverse=True)[:5]:
+        for rs in sorted(
+            rs_list.items,
+            key=lambda x: x.metadata.creation_timestamp or datetime.min,
+            reverse=True,
+        )[:5]:
             containers = rs.spec.template.spec.containers or []
             image = containers[0].image if containers else "unknown"
-            revision = rs.metadata.annotations.get("deployment.kubernetes.io/revision", "0") if rs.metadata.annotations else "0"
-            events.append({
-                "deployment":  deployment or rs.metadata.name,
-                "namespace":   namespace,
-                "image":       image,
-                "revision":    int(revision),
-                "started_at":  rs.metadata.creation_timestamp.isoformat() if rs.metadata.creation_timestamp else datetime.now(timezone.utc).isoformat(),
-                "status":      "complete" if (rs.status.ready_replicas or 0) > 0 else "inactive",
-            })
+            revision = (
+                rs.metadata.annotations.get("deployment.kubernetes.io/revision", "0")
+                if rs.metadata.annotations
+                else "0"
+            )
+            events.append(
+                {
+                    "deployment": deployment or rs.metadata.name,
+                    "namespace": namespace,
+                    "image": image,
+                    "revision": int(revision),
+                    "started_at": rs.metadata.creation_timestamp.isoformat()
+                    if rs.metadata.creation_timestamp
+                    else datetime.now(timezone.utc).isoformat(),
+                    "status": "complete"
+                    if (rs.status.ready_replicas or 0) > 0
+                    else "inactive",
+                }
+            )
 
         return {"events": events}
     except Exception as e:
@@ -85,12 +102,15 @@ async def list_deployments(namespace: str = "default"):
         return {
             "deployments": [
                 {
-                    "name":          d.metadata.name,
-                    "namespace":     d.metadata.namespace,
-                    "replicas":      d.spec.replicas,
-                    "ready":         d.status.ready_replicas or 0,
-                    "image":         (d.spec.template.spec.containers[0].image
-                                      if d.spec.template.spec.containers else "unknown"),
+                    "name": d.metadata.name,
+                    "namespace": d.metadata.namespace,
+                    "replicas": d.spec.replicas,
+                    "ready": d.status.ready_replicas or 0,
+                    "image": (
+                        d.spec.template.spec.containers[0].image
+                        if d.spec.template.spec.containers
+                        else "unknown"
+                    ),
                 }
                 for d in deps.items
             ]
@@ -110,9 +130,7 @@ async def list_namespaces():
         skip = {"kube-system", "kube-public", "kube-node-lease"}
         return {
             "namespaces": [
-                n.metadata.name
-                for n in ns_list.items
-                if n.metadata.name not in skip
+                n.metadata.name for n in ns_list.items if n.metadata.name not in skip
             ]
         }
     except Exception as e:

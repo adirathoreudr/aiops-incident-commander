@@ -11,27 +11,30 @@ Core LangChain-based reasoning loop.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Any
 
-from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
+from .prompts.incident_prompt import (
+    build_human_prompt,
+    build_system_prompt,
+    parse_agent_response,
+)
 from .retrieval.knowledge_store import KnowledgeStore
-from .prompts.incident_prompt import build_system_prompt, build_human_prompt, parse_agent_response
 
 log = logging.getLogger("agent.reasoner")
 
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
-LLM_MODEL        = os.getenv("LLM_MODEL", "gpt-4o-mini")
-LLM_TEMPERATURE  = float(os.getenv("LLM_TEMPERATURE", "0.1"))
-MAX_TOKENS       = int(os.getenv("LLM_MAX_TOKENS", "1500"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
 
 # Confidence thresholds
 AUTO_EXECUTE_THRESHOLD = float(os.getenv("AUTO_EXECUTE_THRESHOLD", "0.75"))
-ESCALATE_THRESHOLD     = float(os.getenv("ESCALATE_THRESHOLD", "0.40"))
+ESCALATE_THRESHOLD = float(os.getenv("ESCALATE_THRESHOLD", "0.40"))
 
 
 class IncidentReasoner:
@@ -56,17 +59,17 @@ class IncidentReasoner:
         """
         try:
             # Retrieve similar incidents + runbooks
-            title   = incident_dict.get("title", "")
+            title = incident_dict.get("title", "")
             service = incident_dict.get("service", "")
-            alerts  = [a.get("alertname", "") for a in incident_dict.get("alerts", [])]
+            alerts = [a.get("alertname", "") for a in incident_dict.get("alerts", [])]
 
             query = f"{title} {service} {' '.join(alerts)}"
             similar_incidents = self.knowledge.search_incidents(query, k=3)
-            runbooks          = self.knowledge.search_runbooks(query, k=2)
+            runbooks = self.knowledge.search_runbooks(query, k=2)
 
             # Build prompt
             system_prompt = build_system_prompt()
-            human_prompt  = build_human_prompt(
+            human_prompt = build_human_prompt(
                 incident=incident_dict,
                 similar_incidents=similar_incidents,
                 runbooks=runbooks,
@@ -80,8 +83,11 @@ class IncidentReasoner:
             response = await self.llm.ainvoke(messages)
             raw_text = response.content
 
-            log.info("LLM responded (%d chars) for incident %s",
-                     len(raw_text), incident_dict.get("incident_id"))
+            log.info(
+                "LLM responded (%d chars) for incident %s",
+                len(raw_text),
+                incident_dict.get("incident_id"),
+            )
 
             # Parse structured response
             parsed = parse_agent_response(raw_text)
@@ -96,22 +102,27 @@ class IncidentReasoner:
             parsed["requires_approval"] = requires_approval
 
             # Merge back into incident
-            incident_dict.update({
-                "incident_type":      parsed.get("incident_type"),
-                "probable_root_cause": parsed.get("probable_root_cause"),
-                "confidence_score":   confidence,
-                "supporting_evidence": parsed.get("supporting_evidence", []),
-                "recommended_action": parsed.get("recommended_action"),
-                "requires_approval":  requires_approval,
-                "status":             "in_triage" if requires_approval else "remediating",
-                "raw_llm_response":   raw_text,  # stored for audit, never shown to end-user
-            })
+            incident_dict.update(
+                {
+                    "incident_type": parsed.get("incident_type"),
+                    "probable_root_cause": parsed.get("probable_root_cause"),
+                    "confidence_score": confidence,
+                    "supporting_evidence": parsed.get("supporting_evidence", []),
+                    "recommended_action": parsed.get("recommended_action"),
+                    "requires_approval": requires_approval,
+                    "status": "in_triage" if requires_approval else "remediating",
+                    "raw_llm_response": raw_text,  # stored for audit, never shown to end-user
+                }
+            )
 
             return incident_dict
 
         except Exception as e:
-            log.exception("Reasoning failed for incident %s: %s",
-                          incident_dict.get("incident_id"), e)
+            log.exception(
+                "Reasoning failed for incident %s: %s",
+                incident_dict.get("incident_id"),
+                e,
+            )
             incident_dict["status"] = "escalated"
             incident_dict["probable_root_cause"] = f"Reasoning failed: {e}"
             incident_dict["requires_approval"] = True

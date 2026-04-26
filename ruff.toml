@@ -1,0 +1,12 @@
+# ruff.toml — project-wide linting config
+line-length = 120
+
+[lint]
+select = ["E", "W", "F", "I"]
+
+[lint.per-file-ignores]
+# Test files — allow long lines for inline JSON payloads
+"**/tests/*.py" = ["E501"]
+
+[lint.isort]
+force-sort-within-sections = true

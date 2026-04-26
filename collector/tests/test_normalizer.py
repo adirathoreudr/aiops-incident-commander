@@ -4,17 +4,20 @@ Unit tests for alert normalization and fingerprinting logic.
 No real cluster or Loki connection needed.
 """
 
-import pytest
-from datetime import datetime
+import os
+import sys
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from collector.normalizer import normalize_alertmanager_payload, _infer_log_level, _parse_severity
-from collector.schema import AlertLabel, Severity, IncidentContext
-
+from collector.normalizer import (
+    _infer_log_level,
+    _parse_severity,
+    normalize_alertmanager_payload,
+)
+from collector.schema import AlertLabel, IncidentContext, Severity
 
 # ── normalize_alertmanager_payload ────────────────────────────────────────────
+
 
 class TestNormalize:
     def test_basic_fields(self):
@@ -55,17 +58,18 @@ class TestNormalize:
     def test_severity_mapping(self):
         cases = [
             ("critical", Severity.CRITICAL),
-            ("high",     Severity.HIGH),
-            ("warning",  Severity.WARNING),
-            ("warn",     Severity.WARNING),
-            ("info",     Severity.INFO),
-            ("unknown",  Severity.WARNING),
+            ("high", Severity.HIGH),
+            ("warning", Severity.WARNING),
+            ("warn", Severity.WARNING),
+            ("info", Severity.INFO),
+            ("unknown", Severity.WARNING),
         ]
         for raw_sev, expected in cases:
             assert _parse_severity(raw_sev) == expected
 
 
 # ── log level inference ───────────────────────────────────────────────────────
+
 
 class TestLogLevel:
     def test_explicit_level_label(self):
@@ -84,6 +88,7 @@ class TestLogLevel:
 
 # ── IncidentContext ───────────────────────────────────────────────────────────
 
+
 class TestIncidentContext:
     def test_to_prompt_context_contains_key_fields(self):
         inc = IncidentContext(
@@ -92,12 +97,14 @@ class TestIncidentContext:
             namespace="staging",
             service="my-service",
             deployment="my-service",
-            alerts=[AlertLabel(
-                alertname="TestAlert",
-                namespace="staging",
-                severity=Severity.HIGH,
-                service="my-service",
-            )],
+            alerts=[
+                AlertLabel(
+                    alertname="TestAlert",
+                    namespace="staging",
+                    severity=Severity.HIGH,
+                    service="my-service",
+                )
+            ],
         )
         ctx = inc.to_prompt_context()
         assert "INCIDENT ID" in ctx
@@ -107,16 +114,14 @@ class TestIncidentContext:
         assert "TestAlert" in ctx
 
     def test_fingerprint_not_set_by_default(self):
-        inc = IncidentContext(
-            title="X", severity=Severity.INFO, namespace="default"
-        )
+        inc = IncidentContext(title="X", severity=Severity.INFO, namespace="default")
         assert inc.fingerprint is None
 
     def test_mark_updated_changes_timestamp(self):
-        inc = IncidentContext(
-            title="X", severity=Severity.INFO, namespace="default"
-        )
+        inc = IncidentContext(title="X", severity=Severity.INFO, namespace="default")
         old_ts = inc.updated_at
-        import time; time.sleep(0.01)
+        import time
+
+        time.sleep(0.01)
         inc.mark_updated()
         assert inc.updated_at > old_ts

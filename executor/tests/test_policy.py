@@ -4,9 +4,10 @@ Unit tests for the PolicyEngine — the most critical safety component.
 Every allowed/blocked/threshold rule is tested explicitly.
 """
 
-import pytest
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from executor.policy import PolicyEngine
 
@@ -31,13 +32,17 @@ class TestPolicyEngine:
         assert allowed
 
     def test_rollout_restart_allowed_staging(self):
-        allowed, _ = self.policy.check("rollout_restart", "staging", "payments-api", 0.80)
+        allowed, _ = self.policy.check(
+            "rollout_restart", "staging", "payments-api", 0.80
+        )
         assert allowed
 
     # ── Blocked namespaces ────────────────────────────────────────────────────
 
     def test_kube_system_blocked(self):
-        allowed, reason = self.policy.check("rollout_restart", "kube-system", "coredns", 0.99)
+        allowed, reason = self.policy.check(
+            "rollout_restart", "kube-system", "coredns", 0.99
+        )
         assert not allowed
         assert "blocked" in reason.lower()
 
@@ -46,7 +51,9 @@ class TestPolicyEngine:
         assert not allowed
 
     def test_cert_manager_blocked(self):
-        allowed, _ = self.policy.check("rollout_restart", "cert-manager", "cert-manager", 0.99)
+        allowed, _ = self.policy.check(
+            "rollout_restart", "cert-manager", "cert-manager", 0.99
+        )
         assert not allowed
 
     # ── Always-approval actions ───────────────────────────────────────────────
@@ -74,8 +81,12 @@ class TestPolicyEngine:
 
     def test_high_risk_namespace_needs_higher_confidence(self):
         # 0.85 passes for staging but not for prod (requires 0.90)
-        allowed_staging, _ = self.policy.check("rollout_restart", "staging", "app", 0.85)
-        allowed_prod,    _ = self.policy.check("rollout_restart", "production", "app", 0.85)
+        allowed_staging, _ = self.policy.check(
+            "rollout_restart", "staging", "app", 0.85
+        )
+        allowed_prod, _ = self.policy.check(
+            "rollout_restart", "production", "app", 0.85
+        )
         assert allowed_staging
         assert not allowed_prod
 
@@ -86,14 +97,20 @@ class TestPolicyEngine:
     # ── Scale bounds ──────────────────────────────────────────────────────────
 
     def test_scale_above_max_blocked(self):
-        allowed, reason = self.policy.check("scale_up", "staging", "app", 0.80, replicas=25)
+        allowed, reason = self.policy.check(
+            "scale_up", "staging", "app", 0.80, replicas=25
+        )
         assert not allowed
         assert "MAX_REPLICAS" in reason
 
     def test_scale_below_min_blocked(self):
-        allowed, reason = self.policy.check("scale_down", "staging", "app", 0.99, replicas=0)
+        allowed, reason = self.policy.check(
+            "scale_down", "staging", "app", 0.99, replicas=0
+        )
         # scale_down hits always-approve first, but test the bounds for scale_up
-        allowed2, reason2 = self.policy.check("scale_up", "staging", "app", 0.80, replicas=0)
+        allowed2, reason2 = self.policy.check(
+            "scale_up", "staging", "app", 0.80, replicas=0
+        )
         assert not allowed2
 
     def test_scale_within_bounds_allowed(self):

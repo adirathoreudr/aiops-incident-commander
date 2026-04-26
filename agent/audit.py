@@ -6,9 +6,9 @@ stored in Redis with a TTL and can be retrieved for compliance review.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -25,10 +25,10 @@ class AuditLogger:
     async def record(self, incident_id: str, incident: dict[str, Any]) -> None:
         """Append a reasoning outcome to the audit log for this incident."""
         entry = {
-            "ts":               datetime.now(timezone.utc).isoformat(),
-            "incident_id":      incident_id,
-            "status":           incident.get("status"),
-            "incident_type":    incident.get("incident_type"),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "incident_id": incident_id,
+            "status": incident.get("status"),
+            "incident_type": incident.get("incident_type"),
             "probable_root_cause": incident.get("probable_root_cause"),
             "confidence_score": incident.get("confidence_score"),
             "recommended_action": incident.get("recommended_action"),
@@ -42,7 +42,9 @@ class AuditLogger:
         existing.append(entry)
 
         await self._redis.setex(key, AUDIT_TTL_SECONDS, json.dumps(existing))
-        log.info("Audit recorded for incident %s (entries=%d)", incident_id, len(existing))
+        log.info(
+            "Audit recorded for incident %s (entries=%d)", incident_id, len(existing)
+        )
 
     async def record_action(
         self,
@@ -56,15 +58,15 @@ class AuditLogger:
     ) -> None:
         """Record a remediation action execution."""
         entry = {
-            "ts":          datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(timezone.utc).isoformat(),
             "incident_id": incident_id,
-            "event_type":  "action_executed",
+            "event_type": "action_executed",
             "action_type": action_type,
-            "target":      target,
-            "params":      params,
-            "actor":       actor,
-            "success":     success,
-            "result":      result,
+            "target": target,
+            "params": params,
+            "actor": actor,
+            "success": success,
+            "result": result,
         }
 
         key = f"audit:{incident_id}"
@@ -82,11 +84,11 @@ class AuditLogger:
         action_type: str,
     ) -> None:
         entry = {
-            "ts":          datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(timezone.utc).isoformat(),
             "incident_id": incident_id,
-            "event_type":  "approval_decision",
-            "approved":    approved,
-            "approver":    approver,
+            "event_type": "approval_decision",
+            "approved": approved,
+            "approver": approver,
             "action_type": action_type,
         }
         key = f"audit:{incident_id}"

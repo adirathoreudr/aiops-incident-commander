@@ -6,16 +6,16 @@ an IncidentContext before being passed to the agent layer.
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+import uuid
+
+from pydantic import BaseModel, Field
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-from pydantic import BaseModel, Field
 
 
 class Severity(str, Enum):
@@ -69,8 +69,8 @@ class RolloutEvent(BaseModel):
 
 
 class RemediationAction(BaseModel):
-    action_type: str         # restart | scale | rollback | notify
-    target: str              # deployment/<name> or app/<name>
+    action_type: str  # restart | scale | rollback | notify
+    target: str  # deployment/<name> or app/<name>
     parameters: dict[str, Any] = Field(default_factory=dict)
     approved: bool = False
     approved_by: str | None = None
@@ -84,6 +84,7 @@ class IncidentContext(BaseModel):
     Single canonical object representing one normalized incident.
     Created by the collector, enriched by the agent, acted on by the executor.
     """
+
     incident_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
@@ -108,7 +109,7 @@ class IncidentContext(BaseModel):
     # Agent output
     incident_type: str | None = None
     probable_root_cause: str | None = None
-    confidence_score: float | None = None   # 0.0 – 1.0
+    confidence_score: float | None = None  # 0.0 – 1.0
     supporting_evidence: list[str] = Field(default_factory=list)
     recommended_action: str | None = None
     requires_approval: bool = True
@@ -146,5 +147,7 @@ class IncidentContext(BaseModel):
         lines.append("")
         lines.append("RECENT ROLLOUT EVENTS:")
         for r in self.rollout_events[-3:]:
-            lines.append(f"  - {r.deployment} rev={r.revision} image={r.image} status={r.status} at={r.started_at}")
+            lines.append(
+                f"  - {r.deployment} rev={r.revision} image={r.image} status={r.status} at={r.started_at}"
+            )
         return "\n".join(lines)

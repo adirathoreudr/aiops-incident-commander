@@ -14,14 +14,15 @@ from typing import Any
 
 log = logging.getLogger("agent.knowledge_store")
 
-RUNBOOKS_PATH   = Path(os.getenv("RUNBOOKS_PATH", "/app/knowledge-base/runbooks"))
-INCIDENTS_PATH  = Path(os.getenv("INCIDENTS_PATH", "/app/knowledge-base/incidents"))
-EMBED_MODEL     = os.getenv("EMBED_MODEL", "text-embedding-3-small")
-USE_EMBEDDINGS  = os.getenv("USE_EMBEDDINGS", "true").lower() == "true"
+RUNBOOKS_PATH = Path(os.getenv("RUNBOOKS_PATH", "/app/knowledge-base/runbooks"))
+INCIDENTS_PATH = Path(os.getenv("INCIDENTS_PATH", "/app/knowledge-base/incidents"))
+EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
+USE_EMBEDDINGS = os.getenv("USE_EMBEDDINGS", "true").lower() == "true"
 
 try:
     from langchain_community.vectorstores import FAISS
     from langchain_openai import OpenAIEmbeddings
+
     FAISS_AVAILABLE = True
 except ImportError:
     FAISS_AVAILABLE = False
@@ -35,16 +36,19 @@ class KnowledgeStore:
     """
 
     def __init__(self) -> None:
-        self._runbooks:   list[dict] = self._load_json_dir(RUNBOOKS_PATH)
-        self._incidents:  list[dict] = self._load_json_dir(INCIDENTS_PATH)
-        self._runbook_index  = None
+        self._runbooks: list[dict] = self._load_json_dir(RUNBOOKS_PATH)
+        self._incidents: list[dict] = self._load_json_dir(INCIDENTS_PATH)
+        self._runbook_index = None
         self._incident_index = None
 
         if FAISS_AVAILABLE and USE_EMBEDDINGS and os.getenv("OPENAI_API_KEY"):
             self._build_indexes()
         else:
-            log.info("KnowledgeStore using keyword fallback (%d runbooks, %d incidents)",
-                     len(self._runbooks), len(self._incidents))
+            log.info(
+                "KnowledgeStore using keyword fallback (%d runbooks, %d incidents)",
+                len(self._runbooks),
+                len(self._incidents),
+            )
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -78,12 +82,19 @@ class KnowledgeStore:
             embeddings = OpenAIEmbeddings(model=EMBED_MODEL)
             if self._runbooks:
                 texts = [self._doc_to_text(d) for d in self._runbooks]
-                self._runbook_index = FAISS.from_texts(texts, embeddings, metadatas=self._runbooks)
+                self._runbook_index = FAISS.from_texts(
+                    texts, embeddings, metadatas=self._runbooks
+                )
             if self._incidents:
                 texts = [self._doc_to_text(d) for d in self._incidents]
-                self._incident_index = FAISS.from_texts(texts, embeddings, metadatas=self._incidents)
-            log.info("FAISS indexes built (runbooks=%d, incidents=%d)",
-                     len(self._runbooks), len(self._incidents))
+                self._incident_index = FAISS.from_texts(
+                    texts, embeddings, metadatas=self._incidents
+                )
+            log.info(
+                "FAISS indexes built (runbooks=%d, incidents=%d)",
+                len(self._runbooks),
+                len(self._incidents),
+            )
         except Exception as e:
             log.exception("Failed to build FAISS indexes: %s", e)
 
@@ -108,4 +119,6 @@ class KnowledgeStore:
 
     @staticmethod
     def _doc_to_text(doc: dict) -> str:
-        return " ".join(str(v) for v in doc.values() if isinstance(v, (str, int, float)))
+        return " ".join(
+            str(v) for v in doc.values() if isinstance(v, (str, int, float))
+        )

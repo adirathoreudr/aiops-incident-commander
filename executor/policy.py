@@ -36,7 +36,7 @@ ALLOWED_ACTIONS = {
 
 # Actions that always require human approval regardless of confidence
 ALWAYS_REQUIRE_APPROVAL = {
-    "scale_down",   # may reduce capacity in prod
+    "scale_down",  # may reduce capacity in prod
     "argocd_rollback",  # state mutation — human must confirm
 }
 
@@ -95,7 +95,9 @@ class PolicyEngine:
         # ── 6. Scale bounds ───────────────────────────────────────────────────
         if action_type in ("scale_up", "scale_down") and replicas is not None:
             if replicas > MAX_REPLICAS:
-                msg = f"Requested replicas {replicas} exceeds MAX_REPLICAS {MAX_REPLICAS}"
+                msg = (
+                    f"Requested replicas {replicas} exceeds MAX_REPLICAS {MAX_REPLICAS}"
+                )
                 return False, msg
             if replicas < MIN_REPLICAS:
                 msg = f"Requested replicas {replicas} below MIN_REPLICAS {MIN_REPLICAS}"
@@ -106,8 +108,13 @@ class PolicyEngine:
             msg = "Deployment name required for mutating actions"
             return False, msg
 
-        log.info("POLICY ALLOW: action=%s ns=%s deploy=%s conf=%.2f",
-                 action_type, namespace, deployment, confidence)
+        log.info(
+            "POLICY ALLOW: action=%s ns=%s deploy=%s conf=%.2f",
+            action_type,
+            namespace,
+            deployment,
+            confidence,
+        )
         return True, "allowed"
 
     def is_high_risk(self, namespace: str, action_type: str) -> bool:
