@@ -9,8 +9,8 @@
   ╚═══════════════════════════════════════════════════════════╝
 ```
 
-[![CI](https://github.com/your-org/aiops-incident-commander/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/aiops-incident-commander/actions/workflows/ci.yml)
-[![CD](https://github.com/your-org/aiops-incident-commander/actions/workflows/cd.yml/badge.svg)](https://github.com/your-org/aiops-incident-commander/actions/workflows/cd.yml)
+[![CI](https://github.com/adirathoreudr/aiops-incident-commander/actions/workflows/ci.yml/badge.svg)](https://github.com/adirathoreudr/aiops-incident-commander/actions/workflows/ci.yml)
+[![CD](https://github.com/adirathoreudr/aiops-incident-commander/actions/workflows/cd.yml/badge.svg)](https://github.com/adirathoreudr/aiops-incident-commander/actions/workflows/cd.yml)
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-f59e0b?logo=python&logoColor=white)](https://python.org)
 [![Next.js 14](https://img.shields.io/badge/Next.js-14-white?logo=next.js&logoColor=black)](https://nextjs.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-EKS-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io)
@@ -718,6 +718,6 @@ MIT — see [LICENSE](LICENSE)
 
 Built with ◈ by a DevOps / Platform engineer who got tired of 3am alerts.
 
-**[🚀 Live Demo](https://aiops-incident-commander.vercel.app)** · **[⭐ Star on GitHub](https://github.com/your-org/aiops-incident-commander)**
+**[🚀 Live Demo](https://aiops-incident-commander.vercel.app)** · **[⭐ Star on GitHub](https://github.com/adirathoreudr/aiops-incident-commander)**
 
 </div>
