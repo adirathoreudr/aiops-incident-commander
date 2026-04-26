@@ -89,68 +89,7 @@ Imagine having a junior DevOps engineer who never sleeps. This AI agent monitors
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     TELEMETRY LAYER                             │
-│  Prometheus ──► Alertmanager ──► Webhook ──► Collector :8000   │
-│  Loki (logs) ─────────────────────────────────────────────────► │
-│  Kubernetes Events / ArgoCD Rollout History ──────────────────► │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ IncidentContext (JSON)
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    INCIDENT COLLECTOR                           │
-│  • Normalise alert labels → canonical schema                   │
-│  • Pull last 15min logs from Loki                              │
-│  • Fetch rollout history from Executor metadata API            │
-│  • Deduplicate: SHA-256 fingerprint, 120s window               │
-│  • Push incident_id → Redis queue                              │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ Redis brpop
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      AI AGENT LAYER                            │
-│  1. Retrieve similar incidents + runbooks (FAISS / keyword)    │
-│  2. Build deterministic evidence-backed prompt                 │
-│  3. Call LLM (GPT-4o-mini, temp=0.1)                          │
-│  4. Parse typed JSON response                                  │
-│  5. Output: incident_type · root_cause · confidence · action   │
-│  6. Policy check: auto-execute OR enqueue for approval         │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                    ┌────────┴────────┐
-                    │                 │
-             conf ≥ 0.75       conf < 0.75
-             low risk          or high risk
-                    │                 │
-                    ▼                 ▼
-           executor:queue     approval queue
-                    │         (UI / webhook)
-                    └────────┬────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   POLICY + EXECUTOR LAYER                      │
-│  • Allowlist: rollout_restart | scale_up | scale_down*         │
-│               argocd_rollback* | notify_only                   │
-│  • Blocked namespaces: kube-system, kube-public, cert-manager  │
-│  • High-risk namespaces: production, prod (conf ≥ 0.90)        │
-│  • * always requires human approval                            │
-│  • Post-action health polling → recovery confirmed             │
-│  • Full audit entry on every action                            │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   OPERATOR DASHBOARD                           │
-│  Next.js 14 · Vercel · CRT amber terminal aesthetic            │
-│  • Live incident feed with status + confidence                 │
-│  • AI root-cause analysis + evidence panel                     │
-│  • Approve / reject actions in one click                       │
-│  • Append-only audit timeline                                  │
-│  • 24-hour incident volume chart                               │
-└─────────────────────────────────────────────────────────────────┘
-```
+![Architecture Diagram](docs/architecture-diagram.png)
 
 ---
 

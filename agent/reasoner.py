@@ -51,7 +51,7 @@ class IncidentReasoner:
         # Determine which provider to use
         if ANTHROPIC_API_KEY and (not OPENAI_API_KEY or "claude" in LLM_MODEL.lower()):
             from langchain_anthropic import ChatAnthropic
-            
+
             model = LLM_MODEL or DEFAULT_ANTHROPIC_MODEL
             self.llm = ChatAnthropic(
                 anthropic_api_key=ANTHROPIC_API_KEY,
@@ -62,7 +62,7 @@ class IncidentReasoner:
             log.info("IncidentReasoner initialised with Anthropic (model=%s)", model)
         else:
             from langchain_openai import ChatOpenAI
-            
+
             model = LLM_MODEL or DEFAULT_OPENAI_MODEL
             self.llm = ChatOpenAI(
                 api_key=OPENAI_API_KEY,
@@ -71,7 +71,7 @@ class IncidentReasoner:
                 max_tokens=MAX_TOKENS,
             )
             log.info("IncidentReasoner initialised with OpenAI (model=%s)", model)
-            
+
         self.knowledge = KnowledgeStore()
 
     async def reason(self, incident_dict: dict[str, Any]) -> dict[str, Any]:
