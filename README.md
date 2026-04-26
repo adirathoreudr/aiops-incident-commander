@@ -716,7 +716,7 @@ MIT — see [LICENSE](LICENSE)
 
 <div align="center">
 
-Built with ◈ by a DevOps / Platform engineer who got tired of 3am alerts.
+Built with ❤️ by Me who just likes to solve real-world problems and is fed up of late night constant alerts;)
 
 **[🚀 Live Demo](https://aiops-incident-commander.vercel.app)** · **[⭐ Star on GitHub](https://github.com/adirathoreudr/aiops-incident-commander)**
 
