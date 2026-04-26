@@ -1,7 +1,7 @@
 # .github/workflows/ci.yml
 # Triggered on every push and PR.
-# Jobs: lint → test → build-images → security-scan
-# Deploy jobs live in cd.yml (main branch only)
+# Jobs: lint → test → ui-build
+# Docker build & deploy live in cd.yml (main branch only, requires AWS secrets)
 
 name: CI
 
@@ -105,107 +105,6 @@ jobs:
         with:
           files: ./collector/coverage.xml,./agent/coverage.xml,./executor/coverage.xml
           fail_ci_if_error: false
-
-  # ── Build images ────────────────────────────────────────────────────────────
-  build:
-    name: Build & Push
-    runs-on: ubuntu-latest
-    needs: test
-    # Skip when AWS secrets are not configured (e.g. forks / demo repos)
-    if: |
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
-      secrets.AWS_DEPLOY_ROLE_ARN != ''
-    permissions:
-      id-token: write
-      contents: read
-
-    strategy:
-      matrix:
-        service: [collector, agent, executor]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Login to ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.ecr-login.outputs.registry }}/aiops-incident-commander/${{ matrix.service }}
-          tags: |
-            type=sha,prefix=sha-
-            type=ref,event=branch
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build and push ${{ matrix.service }}
-        uses: docker/build-push-action@v5
-        with:
-          context: ./${{ matrix.service }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
-
-  # ── Security scan ───────────────────────────────────────────────────────────
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: build
-    if: |
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
-      secrets.AWS_DEPLOY_ROLE_ARN != ''
-    permissions:
-      id-token: write
-      contents: read
-      security-events: write
-
-    strategy:
-      matrix:
-        service: [collector, agent, executor]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Login to ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: >
-            ${{ steps.ecr-login.outputs.registry }}/aiops-incident-commander/${{ matrix.service }}:latest
-          format: sarif
-          output: trivy-${{ matrix.service }}.sarif
-          severity: HIGH,CRITICAL
-          exit-code: 1
-          ignore-unfixed: true
-
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-${{ matrix.service }}.sarif
 
   # ── UI build check ──────────────────────────────────────────────────────────
   ui-build:
