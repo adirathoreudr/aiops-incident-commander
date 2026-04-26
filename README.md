@@ -40,6 +40,27 @@ Ops teams waste hours triaging noisy alerts, manually correlating logs with metr
 
 ---
 
+## ⚡ Quick Setup TL;DR
+
+Get the platform running in under 2 minutes:
+
+1.  **Clone & API Key:**
+    ```bash
+    git clone https://github.com/adirathoreudr/aiops-incident-commander.git
+    cd aiops-incident-commander
+    echo "OPENAI_API_KEY=your_key_here" > .env
+    ```
+2.  **Launch Stack:**
+    ```bash
+    docker compose up -d
+    ```
+3.  **Access Dashboard:**
+    Open **[http://localhost:3001](http://localhost:3001)** to see the live CRT-aesthetic dashboard.
+
+*Note: For the full experience, use the [Live Demo](https://aiops-incident-commander.vercel.app).*
+
+---
+
 ## Results (Simulated Incidents)
 
 | Metric | Target | Achieved |

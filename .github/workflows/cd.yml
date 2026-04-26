@@ -16,11 +16,36 @@ concurrency:
 
 jobs:
 
+  # ── Check Secrets ───────────────────────────────────────────────────────────
+  check-secrets:
+    name: Check for Deployment Secrets
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      has-aws: ${{ steps.check.outputs.has-aws }}
+      has-vercel: ${{ steps.check.outputs.has-vercel }}
+    steps:
+      - id: check
+        shell: bash
+        run: |
+          if [ "${{ secrets.AWS_DEPLOY_ROLE_ARN }}" != "" ]; then
+            echo "has-aws=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-aws=false" >> "$GITHUB_OUTPUT"
+          fi
+          
+          if [ "${{ secrets.VERCEL_TOKEN }}" != "" ]; then
+            echo "has-vercel=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-vercel=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── Deploy to EKS ───────────────────────────────────────────────────────────
   deploy:
     name: Deploy to EKS
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has-aws == 'true'
     environment: production
     permissions:
       id-token: write
@@ -108,7 +133,8 @@ jobs:
   deploy-ui:
     name: Deploy UI → Vercel
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has-vercel == 'true'
     defaults:
       run:
         working-directory: ui
