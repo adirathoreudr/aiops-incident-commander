@@ -16,7 +16,6 @@ import os
 from typing import Any
 
 from langchain.schema import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 from .prompts.incident_prompt import (
     build_human_prompt,
@@ -28,9 +27,14 @@ from .retrieval.knowledge_store import KnowledgeStore
 log = logging.getLogger("agent.reasoner")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
+
+# Default models if not specified
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-20240620"
 
 # Confidence thresholds
 AUTO_EXECUTE_THRESHOLD = float(os.getenv("AUTO_EXECUTE_THRESHOLD", "0.75"))
@@ -44,14 +48,31 @@ class IncidentReasoner:
     """
 
     def __init__(self) -> None:
-        self.llm = ChatOpenAI(
-            api_key=OPENAI_API_KEY,
-            model=LLM_MODEL,
-            temperature=LLM_TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-        )
+        # Determine which provider to use
+        if ANTHROPIC_API_KEY and (not OPENAI_API_KEY or "claude" in LLM_MODEL.lower()):
+            from langchain_anthropic import ChatAnthropic
+            
+            model = LLM_MODEL or DEFAULT_ANTHROPIC_MODEL
+            self.llm = ChatAnthropic(
+                anthropic_api_key=ANTHROPIC_API_KEY,
+                model=model,
+                temperature=LLM_TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+            )
+            log.info("IncidentReasoner initialised with Anthropic (model=%s)", model)
+        else:
+            from langchain_openai import ChatOpenAI
+            
+            model = LLM_MODEL or DEFAULT_OPENAI_MODEL
+            self.llm = ChatOpenAI(
+                api_key=OPENAI_API_KEY,
+                model=model,
+                temperature=LLM_TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+            )
+            log.info("IncidentReasoner initialised with OpenAI (model=%s)", model)
+            
         self.knowledge = KnowledgeStore()
-        log.info("IncidentReasoner initialised (model=%s)", LLM_MODEL)
 
     async def reason(self, incident_dict: dict[str, Any]) -> dict[str, Any]:
         """

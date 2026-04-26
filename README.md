@@ -56,7 +56,13 @@ Imagine having a junior DevOps engineer who never sleeps. This AI agent monitors
     ```bash
     git clone https://github.com/adirathoreudr/aiops-incident-commander.git
     cd aiops-incident-commander
-    echo "OPENAI_API_KEY=your_key_here" > .env
+    
+    # Use OpenAI:
+    echo "OPENAI_API_KEY=your_openai_key" > .env
+    
+    # OR Use Anthropic (Claude):
+    # echo "ANTHROPIC_API_KEY=your_claude_key" > .env
+    # echo "LLM_MODEL=claude-3-5-sonnet-20240620" >> .env
     ```
 2.  **Launch Stack:**
     ```bash
