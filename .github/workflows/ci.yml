@@ -111,7 +111,10 @@ jobs:
     name: Build & Push
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    # Skip when AWS secrets are not configured (e.g. forks / demo repos)
+    if: |
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
+      secrets.AWS_DEPLOY_ROLE_ARN != ''
     permissions:
       id-token: write
       contents: read
@@ -162,7 +165,9 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     needs: build
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    if: |
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
+      secrets.AWS_DEPLOY_ROLE_ARN != ''
     permissions:
       id-token: write
       contents: read
