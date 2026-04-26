@@ -42,7 +42,15 @@ Ops teams waste hours triaging noisy alerts, manually correlating logs with metr
 
 ## ⚡ Quick Setup TL;DR
 
-Get the platform running in under 2 minutes:
+**What does it do?**  
+Imagine having a junior DevOps engineer who never sleeps. This AI agent monitors your servers 24/7. When something breaks (like a website crash or a slow database), it doesn't just send you a "help" message—it reads the logs, finds the exact line of code that failed, and suggests a fix (like restarting the server or rolling back an update).
+
+**How it helps you:**  
+- **No more 3 AM wake-up calls:** The agent can fix common issues automatically while you sleep.
+- **Instant Answers:** Instead of digging through thousands of lines of logs, the AI gives you a 2-sentence summary of what happened.
+- **Safety First:** It always asks for your "thumbs up" before making any big changes, so you're always in control.
+
+### 🚀 Get started in under 2 minutes:
 
 1.  **Clone & API Key:**
     ```bash
@@ -55,7 +63,7 @@ Get the platform running in under 2 minutes:
     docker compose up -d
     ```
 3.  **Access Dashboard:**
-    Open **[http://localhost:3001](http://localhost:3001)** to see the live CRT-aesthetic dashboard.
+    Open **[http://localhost:3001](http://localhost:3001)** to see your live CRT-aesthetic dashboard.
 
 *Note: For the full experience, use the [Live Demo](https://aiops-incident-commander.vercel.app).*
 
