@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
+# End-to-end demo simulation script.
 # scripts/simulate.sh
 # End-to-end demo simulation script.
 # Injects a failure scenario and tails logs to show the full AIOps loop.
 # Usage: ./scripts/simulate.sh [scenario] [collector_url]
 #   scenario: crashloop | oom_kill | high_latency | deployment_regression
 #   collector_url: defaults to http://localhost:8000
-
+SCENARIO="${1:-crashloop}"
 set -euo pipefail
 
 SCENARIO="${1:-crashloop}"
@@ -13,7 +13,7 @@ COLLECTOR_URL="${2:-http://localhost:8000}"
 NAMESPACE="${3:-staging}"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
-AMBER='\033[0;33m'
+CYAN='\033[0;36m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 CYAN='\033[0;36m'
