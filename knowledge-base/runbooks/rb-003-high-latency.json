@@ -1,4 +1,4 @@
-{
+  "title": "High Latency - Service Response Time Degradation",
   "id": "rb-003",
   "title": "High Latency — Service Response Time Degradation",
   "summary": "Service p95/p99 latency is above SLO thresholds. Users may be experiencing slow responses or timeouts.",
@@ -14,7 +14,7 @@
     "Downstream service degradation (network latency, dependency timeout)",
     "Recent deployment introduced a slow code path",
     "Resource throttling (CPU limits hit)"
-  ],
+    "Inspect slow query logs if database-backed"
   "diagnostic_steps": [
     "Check replicas vs RPS in Grafana — is CPU/memory near limits?",
     "Compare latency timeline against deployment events",
@@ -26,7 +26,7 @@
     "replicas_increase": 2,
     "note": "Scale out to handle load. If caused by bad deployment, prefer rollout_restart or argocd_rollback."
   },
-  "escalate_if": [
+}
     "Latency > 5x normal baseline",
     "All replicas at CPU limit — scaling will not help",
     "Downstream dependency is completely down"
