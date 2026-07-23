@@ -1,5 +1,5 @@
-# Multi-stage Python build - LangChain + OpenAI + FAISS
-# Stage 1: builder
+# agent/Dockerfile
+# Multi-stage Python build — LangChain + OpenAI + FAISS
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS builder
@@ -9,7 +9,7 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
-# Stage 2: runtime
+    libffi-dev \
     libblas-dev \
     liblapack-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -24,7 +24,7 @@ FROM python:3.11-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
-# Knowledge base mounted via ConfigMap at runtime.
+
 RUN groupadd --gid 1000 appgroup \
     && useradd --uid 1000 --gid appgroup --shell /bin/sh --create-home appuser
 
