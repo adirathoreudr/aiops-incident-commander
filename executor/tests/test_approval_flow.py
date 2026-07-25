@@ -3,18 +3,19 @@ Regression tests for the human-approval path.
 
 executor/main.py re-runs the policy gate *after* a human has approved an action.
 That is the right instinct — approval should not be a bypass for the namespace
-allowlist — but PolicyEngine.check() currently returns a single boolean that
-conflates two very different verdicts:
+allowlist — but it only works if the gate can distinguish two very different
+verdicts:
 
     "this action is forbidden"          (blocked namespace, unknown action)
     "this action needs a human first"   (scale_down, argocd_rollback, low confidence)
 
-Because both come back as ``False``, an action that merely needed a human is
-still refused *after* the human approves it. The approval button cannot work for
-scale_down or argocd_rollback: the incident goes straight to `escalated`.
+Collapsed into one boolean they are indistinguishable, and an action that merely
+needed a human stays refused after the human approves it — the incident
+dead-ends as escalated and the approval button does nothing.
 
-The fix (Phase 1b) is a three-valued decision — ALLOW / REQUIRE_APPROVAL / BLOCK
-— so the worker can tell "a human already handled this" apart from "never".
+PolicyEngine.evaluate returns ALLOW / REQUIRE_APPROVAL / BLOCK so the two stay
+apart. These tests fix both halves of the contract: what approval unlocks, and
+what it must never unlock.
 """
 
 from __future__ import annotations
@@ -30,34 +31,15 @@ from executor.policy import ALWAYS_REQUIRE_APPROVAL, PolicyEngine  # noqa: E402
 
 
 def decide(policy: PolicyEngine, *, approved: bool = False, **kwargs) -> str:
-    """
-    Ask the policy engine for a verdict as one of "allow" / "require_approval" /
-    "block".
-
-    Phase 1b introduces PolicyEngine.evaluate() with exactly these semantics.
-    Until it lands we fall back to check(), which cannot express
-    "require_approval" — so it reports "block" and the xfail tests below fail as
-    intended. Once evaluate() exists this shim starts returning the real verdict
-    and the xfails flip to XPASS, which (being strict) fails the suite and
-    prompts removing the markers.
-    """
-    if hasattr(policy, "evaluate"):
-        decision, _reason = policy.evaluate(approved=approved, **kwargs)
-        return str(getattr(decision, "value", decision))
-
-    allowed, _reason = policy.check(**kwargs)
-    return "allow" if allowed else "block"
+    """Verdict as a plain string: "allow", "require_approval" or "block"."""
+    decision, _reason = policy.evaluate(approved=approved, **kwargs)
+    return decision.value
 
 
 # ── What approval must unlock ─────────────────────────────────────────────────
 
 
 class TestApprovalUnlocksGatedActions:
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 1b: the post-approval policy gate cannot distinguish "
-        "'needed a human' from 'forbidden', so approving scale_down is a no-op.",
-    )
     @pytest.mark.parametrize("action", sorted(ALWAYS_REQUIRE_APPROVAL))
     def test_approved_action_is_permitted(self, action):
         verdict = decide(
@@ -74,11 +56,6 @@ class TestApprovalUnlocksGatedActions:
             "the incident is escalated instead of remediated"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 1b: low-confidence incidents are blocked outright rather "
-        "than routed to the approval queue, so approving them does nothing.",
-    )
     def test_approved_low_confidence_action_is_permitted(self):
         verdict = decide(
             PolicyEngine(),
@@ -132,11 +109,6 @@ class TestApprovalIsNotAnOverride:
 
 
 class TestUnapprovedActionsRouteToApproval:
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 1b: check() collapses require_approval into block, so the "
-        "worker marks these 'escalated' instead of queueing them for a human.",
-    )
     @pytest.mark.parametrize("action", sorted(ALWAYS_REQUIRE_APPROVAL))
     def test_gated_action_awaits_approval_rather_than_being_blocked(self, action):
         verdict = decide(

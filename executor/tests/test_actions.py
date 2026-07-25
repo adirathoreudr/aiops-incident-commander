@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from executor.actions import ActionDispatcher  # noqa: E402
+from executor.policy import MAX_REPLICAS  # noqa: E402
 
 
 @pytest.fixture
@@ -89,16 +90,15 @@ class TestScale:
         kwargs = apps_api.patch_namespaced_deployment_scale.call_args.kwargs
         assert kwargs["body"] == {"spec": {"replicas": 7}}
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 1d: with no replica count the dispatcher gives up, so a "
-        "scale_up recommendation that omits replicas can never execute. It "
-        "should derive a target from the deployment's current replica count.",
-    )
     async def test_missing_replicas_derives_a_target(self, dispatcher, apps_api):
-        apps_api.read_namespaced_deployment.return_value = MagicMock(
-            spec_replicas=3, **{"spec.replicas": 3}
-        )
+        """
+        scale_up with no explicit replica count is the common case — the model
+        frequently omits it — so it has to resolve to something rather than
+        failing.
+        """
+        deployment = MagicMock()
+        deployment.spec.replicas = 4
+        apps_api.read_namespaced_deployment.return_value = deployment
 
         result = await dispatcher.execute(
             action_type="scale_up",
@@ -107,11 +107,54 @@ class TestScale:
             replicas=None,
         )
 
-        assert result["success"] is True, (
-            "scale_up with no explicit replica count is the common case — the "
-            "LLM frequently omits it — and it currently always fails"
+        assert result["success"] is True
+        kwargs = apps_api.patch_namespaced_deployment_scale.call_args.kwargs
+        assert kwargs["body"] == {"spec": {"replicas": 6}}  # ceil(4 * 1.5)
+
+    async def test_derived_target_respects_the_policy_ceiling(
+        self, dispatcher, apps_api
+    ):
+        deployment = MagicMock()
+        deployment.spec.replicas = 19
+        apps_api.read_namespaced_deployment.return_value = deployment
+
+        await dispatcher.execute(
+            action_type="scale_up",
+            namespace="orders",
+            deployment="order-service",
+            replicas=None,
         )
-        apps_api.patch_namespaced_deployment_scale.assert_called_once()
+
+        kwargs = apps_api.patch_namespaced_deployment_scale.call_args.kwargs
+        assert kwargs["body"]["spec"]["replicas"] == MAX_REPLICAS
+
+    async def test_scale_down_refuses_to_guess(self, dispatcher, apps_api):
+        """
+        Deriving a scale_up target is a safe bet; guessing how far to shed
+        capacity during an incident is how a slowdown becomes an outage.
+        """
+        result = await dispatcher.execute(
+            action_type="scale_down",
+            namespace="orders",
+            deployment="order-service",
+            replicas=None,
+        )
+
+        assert result["success"] is False
+        apps_api.patch_namespaced_deployment_scale.assert_not_called()
+
+    async def test_unreadable_deployment_fails_cleanly(self, dispatcher, apps_api):
+        apps_api.read_namespaced_deployment.side_effect = RuntimeError("no such thing")
+
+        result = await dispatcher.execute(
+            action_type="scale_up",
+            namespace="orders",
+            deployment="order-service",
+            replicas=None,
+        )
+
+        assert result["success"] is False
+        apps_api.patch_namespaced_deployment_scale.assert_not_called()
 
 
 # ── notify_only and unknown actions ───────────────────────────────────────────

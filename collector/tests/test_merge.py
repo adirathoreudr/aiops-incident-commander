@@ -78,11 +78,6 @@ class TestSchemaPreservesLifecycleFields:
         assert dumped["confidence_score"] == 0.94
         assert dumped["grouped_alert_count"] == 3
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 1f: IncidentContext does not declare agent/executor fields, "
-        "so Pydantic drops them and the dedup merge deletes remediation history.",
-    )
     @pytest.mark.parametrize("field", DOWNSTREAM_FIELDS)
     def test_downstream_field_survives_merge(self, field):
         revived = IncidentContext(**_enriched_incident())
@@ -93,10 +88,6 @@ class TestSchemaPreservesLifecycleFields:
             "a dedup merge on an active incident would erase it"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 1f: see test_downstream_field_survives_merge.",
-    )
     def test_replicas_survive_so_executor_can_scale(self):
         """
         The most damaging instance of the drop: the executor reads replicas from

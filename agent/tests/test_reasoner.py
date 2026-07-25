@@ -18,8 +18,6 @@ import json
 import os
 import sys
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from agent.reasoner import IncidentReasoner  # noqa: E402
@@ -102,12 +100,6 @@ def _incident() -> dict:
 
 
 class TestActionParamsPropagation:
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 1a: reason() omits recommended_action_params from its "
-        "merge, so the executor never receives a replica target and every "
-        "scale action fails with 'replicas parameter required'.",
-    )
     async def test_action_params_reach_the_incident(self):
         result = await _reasoner(_FakeLLM(_llm_payload())).reason(_incident())
 
@@ -118,9 +110,42 @@ class TestActionParamsPropagation:
         assert result["recommended_action_params"]["replicas"] == 7
 
     async def test_action_itself_is_propagated(self):
-        """Contrast: the action name *is* merged, which is why this looks fine."""
         result = await _reasoner(_FakeLLM(_llm_payload())).reason(_incident())
         assert result["recommended_action"] == "scale_up"
+
+    async def test_non_numeric_replicas_are_discarded(self):
+        """A junk replica count must not reach the cluster as one."""
+        result = await _reasoner(
+            _FakeLLM(
+                _llm_payload(
+                    recommended_action_params={
+                        "deployment": "order-service",
+                        "replicas": "as many as needed",
+                    }
+                )
+            )
+        ).reason(_incident())
+
+        assert "replicas" not in result["recommended_action_params"]
+
+    async def test_model_cannot_retarget_a_different_namespace(self):
+        """
+        The namespace is taken from the incident, not the response. Otherwise a
+        model that has read attacker-controlled log lines could aim a restart at
+        a workload nobody was triaging.
+        """
+        result = await _reasoner(
+            _FakeLLM(
+                _llm_payload(
+                    recommended_action_params={
+                        "namespace": "kube-system",
+                        "deployment": "coredns",
+                    }
+                )
+            )
+        ).reason(_incident())
+
+        assert result["recommended_action_params"]["namespace"] == "orders"
 
 
 # ── Behaviour that is already correct and must stay that way ──────────────────

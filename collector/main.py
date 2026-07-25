@@ -31,6 +31,11 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 LOKI_URL = os.getenv("LOKI_URL", "http://loki:3100")
 K8S_API_URL = os.getenv("K8S_API_URL", "http://aiops-executor:8002")
 DEDUP_WINDOW_S = int(os.getenv("DEDUP_WINDOW_SECONDS", "120"))
+INCIDENT_TTL_S = int(os.getenv("INCIDENT_TTL_SECONDS", "3600"))
+
+# Sorted set of incident IDs scored by creation time, so the dashboard can ask
+# for "the most recent N" without scanning the keyspace.
+INCIDENT_INDEX_KEY = "incidents:index"
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -131,15 +136,33 @@ async def simulate_incident(payload: dict):
 
 @app.get("/incidents")
 async def list_incidents(limit: int = 20):
-    keys = await redis_client.keys("incident:*")
+    """
+    Most recent incidents first.
+
+    Ordering comes from a sorted set scored by creation time. Scanning
+    ``incident:*`` and sorting the keys instead would order by UUID, which is
+    to say arbitrarily — and KEYS is an O(N) command that blocks the server,
+    so it gets slower exactly as an incident storm makes the dashboard matter
+    most.
+    """
+    ids = await redis_client.zrevrange(INCIDENT_INDEX_KEY, 0, max(limit - 1, 0))
     incidents = []
-    for k in sorted(keys, reverse=True)[:limit]:
-        raw = await redis_client.get(k)
-        if raw:
-            try:
-                incidents.append(json.loads(raw))
-            except json.JSONDecodeError:
-                continue
+    stale: list[str] = []
+
+    for incident_id in ids:
+        raw = await redis_client.get(f"incident:{incident_id}")
+        if not raw:
+            # The incident's TTL expired; the index outlives it, so drop it.
+            stale.append(incident_id)
+            continue
+        try:
+            incidents.append(json.loads(raw))
+        except json.JSONDecodeError:
+            continue
+
+    if stale:
+        await redis_client.zrem(INCIDENT_INDEX_KEY, *stale)
+
     return {"incidents": incidents, "count": len(incidents)}
 
 
@@ -179,6 +202,11 @@ async def _do_process(body: dict) -> None:
                 K8S_API_URL, alert.namespace, alert.deployment
             )
 
+            # Prefer the image the alert reported; fall back to the newest
+            # rollout. Without this the agent is asked to reason about a
+            # possible bad deploy while being told the image tag is "unknown".
+            image_tag = alert.image_tag or (rollouts[0].image if rollouts else None)
+
             incident = IncidentContext(
                 title=f"{alert.alertname} in {alert.namespace}/{alert.service or alert.pod or 'unknown'}",
                 severity=alert.severity,
@@ -187,6 +215,7 @@ async def _do_process(body: dict) -> None:
                 deployment=alert.deployment,
                 pod=alert.pod,
                 node=alert.node,
+                image_tag=image_tag,
                 alerts=[alert],
                 logs=logs,
                 rollout_events=rollouts,
@@ -211,13 +240,16 @@ async def _merge(incident_id: str, alert: AlertLabel) -> None:
     incident.grouped_alert_count += 1
     incident.mark_updated()
     await redis_client.setex(
-        f"incident:{incident_id}", 3600, incident.model_dump_json()
+        f"incident:{incident_id}", INCIDENT_TTL_S, incident.model_dump_json()
     )
 
 
 async def _persist_and_enqueue(incident: IncidentContext) -> None:
     await redis_client.setex(
-        f"incident:{incident.incident_id}", 3600, incident.model_dump_json()
+        f"incident:{incident.incident_id}", INCIDENT_TTL_S, incident.model_dump_json()
+    )
+    await redis_client.zadd(
+        INCIDENT_INDEX_KEY, {incident.incident_id: incident.created_at.timestamp()}
     )
     if incident.fingerprint:
         await redis_client.setex(

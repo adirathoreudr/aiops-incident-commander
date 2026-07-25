@@ -28,7 +28,7 @@ from starlette.responses import Response
 from .actions import ActionDispatcher
 from .health import HealthChecker
 from .meta import MetaRouter
-from .policy import PolicyEngine
+from .policy import Decision, PolicyEngine
 
 log = logging.getLogger("executor")
 logging.basicConfig(
@@ -163,10 +163,18 @@ async def manual_execute(req: ManualActionRequest):
     policy = PolicyEngine()
     dispatcher = ActionDispatcher()
 
-    allowed, reason = policy.check(
-        req.action_type, req.namespace, req.deployment, confidence=1.0
+    # An operator called this endpoint directly, so the action is approved by
+    # definition — but the hard rules (allowlist, blocked namespaces, scale
+    # bounds) still apply, which is what evaluate() enforces regardless.
+    decision, reason = policy.evaluate(
+        req.action_type,
+        req.namespace,
+        req.deployment,
+        confidence=1.0,
+        replicas=req.replicas,
+        approved=True,
     )
-    if not allowed:
+    if decision is not Decision.ALLOW:
         actions_blocked.inc()
         raise HTTPException(403, f"Policy blocked action: {reason}")
 
@@ -225,20 +233,43 @@ async def executor_worker() -> None:
 
             incident = json.loads(raw)
             action_type = incident.get("recommended_action", "notify_only")
-            params = incident.get("recommended_action_params", {})
+            params = incident.get("recommended_action_params") or {}
             namespace = params.get("namespace") or incident.get("namespace", "default")
             deployment = params.get("deployment") or incident.get("deployment", "")
             confidence = incident.get("confidence_score", 0.0)
+            replicas = params.get("replicas")
 
-            # Final policy gate
-            allowed, reason = policy.check(
-                action_type, namespace, deployment, confidence
+            # Final policy gate. An incident carrying approved_by reached this
+            # queue because a human signed off, so the gate must not re-apply
+            # the checks whose entire purpose was to summon that human — the
+            # hard rules still apply either way.
+            approved = bool(incident.get("approved_by"))
+            decision, reason = policy.evaluate(
+                action_type,
+                namespace,
+                deployment,
+                confidence,
+                replicas,
+                approved=approved,
             )
-            if not allowed:
+
+            if decision is Decision.BLOCK:
                 actions_blocked.inc()
                 log.warning("Action blocked by policy for %s: %s", incident_id, reason)
                 incident["status"] = "escalated"
                 incident["policy_block_reason"] = reason
+                await redis_client.setex(
+                    f"incident:{incident_id}", 3600, json.dumps(incident)
+                )
+                continue
+
+            if decision is Decision.REQUIRE_APPROVAL:
+                log.info(
+                    "Incident %s awaiting human approval: %s", incident_id, reason
+                )
+                incident["status"] = "in_triage"
+                incident["requires_approval"] = True
+                incident["approval_reason"] = reason
                 await redis_client.setex(
                     f"incident:{incident_id}", 3600, json.dumps(incident)
                 )
@@ -257,7 +288,7 @@ async def executor_worker() -> None:
                     action_type=action_type,
                     namespace=namespace,
                     deployment=deployment,
-                    replicas=params.get("replicas"),
+                    replicas=replicas,
                 )
 
             actions_executed.labels(

@@ -19,7 +19,7 @@ import redis.asyncio as aioredis
 from starlette.responses import Response
 
 from .audit import AuditLogger
-from .reasoner import IncidentReasoner
+from .reasoner import AUTO_EXECUTE_THRESHOLD, IncidentReasoner
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -133,11 +133,15 @@ async def queue_worker() -> None:
             # Store audit record
             await auditor.record(incident_id, result)
 
-            # If auto-executable action, enqueue executor
+            # If auto-executable action, enqueue executor. The threshold comes
+            # from the reasoner rather than a literal so that raising
+            # AUTO_EXECUTE_THRESHOLD tightens both gates at once — a local 0.7
+            # here would silently keep admitting work the reasoner had already
+            # decided needed a human.
             if (
                 not result.get("requires_approval")
                 and result.get("recommended_action")
-                and result.get("confidence_score", 0) >= 0.7
+                and result.get("confidence_score", 0) >= AUTO_EXECUTE_THRESHOLD
             ):
                 await redis_client.lpush("executor:queue", incident_id)
                 log.info("Enqueued incident %s for auto-execution", incident_id)
