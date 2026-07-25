@@ -1,12 +1,22 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // The browser talks only to this origin; Next proxies through to the
+  // services. Keeping the hop server-side means service URLs (and, once the
+  // executor is authenticated, its token) never reach the client.
   async rewrites() {
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000'
+    const collector = process.env.COLLECTOR_URL || 'http://localhost:8000'
+    const executor = process.env.EXECUTOR_URL || 'http://localhost:8002'
     return [
       {
         source: '/api/collector/:path*',
-        destination: `${apiBase}/:path*`,
+        destination: `${collector}/:path*`,
+      },
+      {
+        // Approvals and the audit trail live on the executor. Without this
+        // rule the approve button and the audit tab resolved to nothing.
+        source: '/api/executor/:path*',
+        destination: `${executor}/:path*`,
       },
     ]
   },

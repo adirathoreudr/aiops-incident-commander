@@ -19,17 +19,28 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
 export default function IncidentDetail() {
   const router = useRouter()
   const id = router.query.id as string
-  const { incident, isLoading } = useIncident(id)
+  const { incident, isLoading, notFound, error, refresh } = useIncident(id)
   const { entries } = useAudit(id)
   const [approving, setApproving] = useState(false)
   const [approveResult, setApproveResult] = useState<string | null>(null)
+  const [approveError, setApproveError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'overview' | 'logs' | 'rollouts' | 'audit'>('overview')
 
   const handleApprove = async (approved: boolean) => {
     setApproving(true)
+    setApproveError(null)
     try {
-      await approveAction(id, approved, 'operator@demo')
-      setApproveResult(approved ? 'Action approved and enqueued for execution.' : 'Action rejected. Incident escalated for manual review.')
+      await approveAction(id, approved, 'operator')
+      setApproveResult(
+        approved
+          ? 'Action approved and enqueued for execution.'
+          : 'Action rejected. Incident escalated for manual review.'
+      )
+      // Pull the incident straight back so the operator sees the executor's
+      // outcome rather than a message asserting something happened.
+      refresh()
+    } catch (e) {
+      setApproveError(e instanceof Error ? e.message : 'Approval failed')
     } finally {
       setApproving(false)
     }
@@ -45,11 +56,31 @@ export default function IncidentDetail() {
     )
   }
 
+  // A missing incident and an unreachable collector are different problems and
+  // need different responses from whoever is looking at this page.
+  if (error && !notFound) {
+    return (
+      <Layout>
+        <div className="font-mono text-xs py-24 text-center">
+          <p className="text-2xl text-red-400 mb-3">⚠</p>
+          <p className="text-red-400 tracking-widest mb-2">CANNOT REACH COLLECTOR</p>
+          <p className="text-2xs text-ink-muted">{error.message}</p>
+          <div className="mt-4">
+            <Link href="/dashboard" className="text-amber-400 hover:text-amber-300 transition-colors">
+              ← BACK TO DASHBOARD
+            </Link>
+          </div>
+        </div>
+      </Layout>
+    )
+  }
+
   if (!incident) {
     return (
       <Layout>
         <div className="font-mono text-xs text-ink-muted py-24 text-center">
           INCIDENT NOT FOUND
+          <p className="text-2xs mt-2">It may have passed its retention window.</p>
           <div className="mt-4">
             <Link href="/dashboard" className="text-amber-400 hover:text-amber-300 transition-colors">
               ← BACK TO DASHBOARD
@@ -199,7 +230,15 @@ export default function IncidentDetail() {
               </div>
             )}
 
-            {approveResult && (
+            {approveError && (
+              <div className="mt-auto p-3 border border-red-400/40 bg-red-400/5">
+                <p className="font-mono text-2xs text-red-400">
+                  ✗ {approveError} — the action was not submitted.
+                </p>
+              </div>
+            )}
+
+            {approveResult && !approveError && (
               <div className="mt-auto p-3 border border-amber-400/30 bg-amber-400/5">
                 <p className="font-mono text-2xs text-amber-400">{approveResult}</p>
               </div>

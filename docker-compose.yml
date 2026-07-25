@@ -130,6 +130,25 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── UI ─────────────────────────────────────────────────────────────────────
+  # The dashboard proxies to the collector and executor through Next rewrites,
+  # so the browser only ever talks to this origin and the service URLs stay
+  # server-side.
+  ui:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev"
+    environment:
+      COLLECTOR_URL: http://collector:8000
+      EXECUTOR_URL: http://executor:8002
+    volumes:
+      - ./ui:/app
+      - /app/node_modules
+    ports:
+      - "3001:3001"
+    networks: [aiops]
+    depends_on: [collector, executor]
+
   # ── Executor ───────────────────────────────────────────────────────────────
   executor:
     build:

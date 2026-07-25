@@ -7,9 +7,6 @@
       "use": "@vercel/next"
     }
   ],
-  "env": {
-    "NEXT_PUBLIC_DEMO_MODE": "true"
-  },
   "framework": "nextjs",
   "outputDirectory": ".next",
   "buildCommand": "npm run build",
