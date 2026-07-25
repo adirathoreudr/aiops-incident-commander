@@ -84,21 +84,25 @@ jobs:
           pip install -r agent/requirements.txt
           pip install -r executor/requirements.txt
 
+      # Each service writes its coverage report to its own path — a bare
+      # --cov-report=xml puts every report at ./coverage.xml, so the last run
+      # overwrites the others and the upload below references files that were
+      # never created.
       - name: Run collector tests
         env:
           REDIS_URL: redis://localhost:6379
-        run: pytest collector/tests/ -v --cov=collector --cov-report=xml --cov-report=term-missing
+        run: pytest collector/tests/ -v --cov=collector --cov-report=xml:collector/coverage.xml --cov-report=term-missing
 
       - name: Run agent tests
         env:
           REDIS_URL: redis://localhost:6379
           OPENAI_API_KEY: "test-key-not-real"
-        run: pytest agent/tests/ -v --cov=agent --cov-report=xml --cov-report=term-missing
+        run: pytest agent/tests/ -v --cov=agent --cov-report=xml:agent/coverage.xml --cov-report=term-missing
 
       - name: Run executor tests
         env:
           REDIS_URL: redis://localhost:6379
-        run: pytest executor/tests/ -v --cov=executor --cov-report=xml --cov-report=term-missing
+        run: pytest executor/tests/ -v --cov=executor --cov-report=xml:executor/coverage.xml --cov-report=term-missing
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4

@@ -32,6 +32,13 @@ def normalize_alertmanager_payload(raw: dict[str, Any]) -> AlertLabel:
         deployment=labels.get("deployment") or labels.get("app"),
         node=labels.get("node") or labels.get("instance"),
         container=labels.get("container"),
+        # The running image is the single strongest signal for "did a deploy
+        # cause this", so pick it up wherever the exporter happens to put it.
+        image_tag=(
+            labels.get("image_tag")
+            or labels.get("image")
+            or labels.get("container_image")
+        ),
         extra={
             k: v
             for k, v in labels.items()
@@ -47,6 +54,9 @@ def normalize_alertmanager_payload(raw: dict[str, Any]) -> AlertLabel:
                 "node",
                 "instance",
                 "container",
+                "container_image",
+                "image",
+                "image_tag",
                 "job",
             }
         },

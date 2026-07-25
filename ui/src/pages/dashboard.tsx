@@ -7,8 +7,7 @@ import {
 import Layout from '@/components/Layout'
 import IncidentCard from '@/components/IncidentCard'
 import { StatCard } from '@/components/StatCard'
-import { useIncidents, useStats } from '@/lib/api'
-import { TIMELINE_DATA } from '@/lib/demo-data'
+import { useIncidents, useIncidentTimeline, useStats } from '@/lib/api'
 import type { IncidentStatus, Severity } from '@/lib/types'
 
 const FILTERS: { label: string; value: IncidentStatus | 'all' }[] = [
@@ -32,8 +31,9 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 }
 
 export default function Dashboard() {
-  const { incidents, isLoading } = useIncidents()
+  const { incidents, isLoading, error } = useIncidents()
   const { stats } = useStats()
+  const timeline = useIncidentTimeline()
   const [filter, setFilter] = useState<IncidentStatus | 'all'>('all')
   const [sevFilter, setSevFilter] = useState<Severity | 'all'>('all')
 
@@ -52,30 +52,43 @@ export default function Dashboard() {
             INCIDENT FEED
           </h1>
           <p className="font-mono text-xs text-ink-muted mt-1">
-            {incidents.length} incidents · {stats.critical_count} critical · {stats.resolved_today} resolved today
+            {incidents.length} retained · {stats.critical_count} critical · {stats.resolved} resolved
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="pulse-dot text-amber-400" style={{ background: '#f59e0b' }} />
-          <span className="font-mono text-2xs text-amber-500/70 tracking-widest">POLLING 5s</span>
+          <span
+            className={clsx('pulse-dot', error ? 'text-red-400' : 'text-amber-400')}
+            style={{ background: error ? '#ff3b3b' : '#f59e0b' }}
+          />
+          <span className={clsx(
+            'font-mono text-2xs tracking-widest',
+            error ? 'text-red-400' : 'text-amber-500/70'
+          )}>
+            {error ? 'COLLECTOR UNREACHABLE' : 'POLLING 5s'}
+          </span>
         </div>
       </div>
 
       {/* Stat row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-        <StatCard label="OPEN"        value={stats.total_open}            accent="red"   sub="active incidents" />
-        <StatCard label="CRITICAL"    value={stats.critical_count}        accent="red"   sub="need attention" />
-        <StatCard label="RESOLVED"    value={stats.resolved_today}        accent="green" sub="today" />
-        <StatCard label="AUTO-CLOSED" value={`${stats.auto_resolved_pct}%`} accent="blue"  sub="no manual action" />
+        <StatCard label="OPEN"       value={stats.total_open}        accent="red"   sub="active incidents" />
+        <StatCard label="CRITICAL"   value={stats.critical_count}    accent="red"   sub="need attention" />
+        <StatCard label="AWAITING"   value={stats.awaiting_approval} accent="amber" sub="need approval" />
+        <StatCard label="RESOLVED"   value={stats.resolved}          accent="green" sub="in retained window" />
       </div>
 
       {/* Timeline chart */}
       <div className="border-crt p-5 mb-8">
         <p className="font-mono text-2xs tracking-widest text-ink-muted mb-4">
-          ◈ INCIDENT VOLUME — LAST 24 HOURS
+          ◈ INCIDENT VOLUME — RETAINED WINDOW
         </p>
+        {timeline.length === 0 ? (
+          <p className="font-mono text-xs text-ink-muted py-10 text-center">
+            NO INCIDENT HISTORY TO PLOT
+          </p>
+        ) : (
         <ResponsiveContainer width="100%" height={120}>
-          <AreaChart data={TIMELINE_DATA} margin={{ top: 0, right: 0, left: -24, bottom: 0 }}>
+          <AreaChart data={timeline} margin={{ top: 0, right: 0, left: -24, bottom: 0 }}>
             <defs>
               <linearGradient id="incGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%"  stopColor="#f59e0b" stopOpacity={0.3} />
@@ -93,6 +106,7 @@ export default function Dashboard() {
             <Area type="monotone" dataKey="resolved"  stroke="#22c55e" strokeWidth={1.5} fill="url(#resGrad)" dot={false} />
           </AreaChart>
         </ResponsiveContainer>
+        )}
         <div className="flex gap-6 mt-2">
           <div className="flex items-center gap-2">
             <span className="w-6 h-px" style={{ background: '#f59e0b', display: 'inline-block' }} />
@@ -140,15 +154,28 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Incident list */}
-      {isLoading ? (
+      {/* Incident list.
+          "The collector is down" and "nothing is on fire" look identical if
+          both render as an empty list, and only one of them is good news. */}
+      {error ? (
+        <div className="border-crt p-12 text-center" style={{ borderColor: 'rgba(255,59,59,0.3)' }}>
+          <p className="font-mono text-2xl text-red-400 mb-2">⚠</p>
+          <p className="font-mono text-xs text-red-400 tracking-widest mb-2">CANNOT REACH COLLECTOR</p>
+          <p className="font-mono text-2xs text-ink-muted">
+            {error.message} — incidents cannot be listed, so this page is not
+            evidence that the cluster is healthy.
+          </p>
+        </div>
+      ) : isLoading ? (
         <div className="font-mono text-xs text-ink-muted py-16 text-center animate-pulse">
           CONNECTING TO COLLECTOR<span className="cursor" />
         </div>
       ) : filtered.length === 0 ? (
         <div className="border-crt p-12 text-center">
           <p className="font-mono text-2xl text-emerald-400 mb-2">◎</p>
-          <p className="font-mono text-xs text-ink-muted tracking-widest">NO INCIDENTS MATCHING FILTER</p>
+          <p className="font-mono text-xs text-ink-muted tracking-widest">
+            {incidents.length === 0 ? 'NO ACTIVE INCIDENTS' : 'NO INCIDENTS MATCHING FILTER'}
+          </p>
         </div>
       ) : (
         <div className="grid md:grid-cols-2 gap-3">

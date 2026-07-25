@@ -122,7 +122,10 @@ class IncidentReasoner:
             )
             parsed["requires_approval"] = requires_approval
 
-            # Merge back into incident
+            # Merge back into incident. recommended_action_params must travel
+            # with the action: the executor reads the replica target from it,
+            # and without it every scale recommendation arrives at the cluster
+            # with nothing to act on.
             incident_dict.update(
                 {
                     "incident_type": parsed.get("incident_type"),
@@ -130,6 +133,9 @@ class IncidentReasoner:
                     "confidence_score": confidence,
                     "supporting_evidence": parsed.get("supporting_evidence", []),
                     "recommended_action": parsed.get("recommended_action"),
+                    "recommended_action_params": _sanitise_action_params(
+                        parsed.get("recommended_action_params"), incident_dict
+                    ),
                     "requires_approval": requires_approval,
                     "status": "in_triage" if requires_approval else "remediating",
                     "raw_llm_response": raw_text,  # stored for audit, never shown to end-user
@@ -149,6 +155,37 @@ class IncidentReasoner:
             incident_dict["requires_approval"] = True
             incident_dict["confidence_score"] = 0.0
             return incident_dict
+
+
+def _sanitise_action_params(raw: Any, incident: dict) -> dict[str, Any]:
+    """
+    Normalise the action parameters the model returned.
+
+    Only the three keys the executor actually reads are kept, so a model that
+    invents extra fields cannot smuggle anything into the execution path.
+    Namespace and deployment fall back to the incident's own values rather than
+    being trusted from the response — the model has no business retargeting an
+    action at a different workload than the one being triaged.
+
+    Bounds on the replica count are deliberately not applied here; the policy
+    engine owns those limits and duplicating them invites the two copies to
+    drift apart.
+    """
+    params = raw if isinstance(raw, dict) else {}
+
+    clean: dict[str, Any] = {
+        "namespace": incident.get("namespace"),
+        "deployment": params.get("deployment") or incident.get("deployment"),
+    }
+
+    replicas = params.get("replicas")
+    if replicas is not None:
+        try:
+            clean["replicas"] = int(replicas)
+        except (TypeError, ValueError):
+            log.warning("Discarding non-numeric replicas from LLM: %r", replicas)
+
+    return clean
 
 
 def _is_high_impact(incident: dict) -> bool:

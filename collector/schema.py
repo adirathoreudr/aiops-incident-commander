@@ -42,6 +42,7 @@ class AlertLabel(BaseModel):
     deployment: str | None = None
     node: str | None = None
     container: str | None = None
+    image_tag: str | None = None
     extra: dict[str, str] = Field(default_factory=dict)
 
 
@@ -107,15 +108,31 @@ class IncidentContext(BaseModel):
     rollout_events: list[RolloutEvent] = Field(default_factory=list)
 
     # Agent output
+    #
+    # These are declared here, on the collector's schema, because this model is
+    # the canonical representation of an incident for its whole lifecycle — the
+    # collector creates it, the agent enriches it, the executor acts on it. The
+    # collector revives stored incidents through this model when deduplicating,
+    # and Pydantic drops any key the model does not declare, so a field that
+    # lives only in the agent's dict is silently erased the moment a second
+    # alert merges into an incident that has already been triaged.
     incident_type: str | None = None
     probable_root_cause: str | None = None
     confidence_score: float | None = None  # 0.0 – 1.0
     supporting_evidence: list[str] = Field(default_factory=list)
     recommended_action: str | None = None
+    recommended_action_params: dict[str, Any] = Field(default_factory=dict)
     requires_approval: bool = True
+    approval_reason: str | None = None
+    raw_llm_response: str | None = None  # audit only, never surfaced to the UI
 
     # Remediation
     actions: list[RemediationAction] = Field(default_factory=list)
+    last_action: dict[str, Any] | None = None
+    approved_by: str | None = None
+    approved_at: str | None = None
+    rejected_by: str | None = None
+    policy_block_reason: str | None = None
 
     # Dedup
     fingerprint: str | None = None

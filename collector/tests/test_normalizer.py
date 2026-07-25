@@ -55,6 +55,41 @@ class TestNormalize:
         assert "custom_label" in alert.extra
         assert alert.extra["custom_label"] == "custom_value"
 
+    def test_image_tag_read_from_labels(self):
+        """
+        The running image is the strongest "did a deploy cause this" signal, so
+        an alert that carries it must not reach the agent as "unknown".
+        """
+        raw = {
+            "labels": {
+                "alertname": "KubePodCrashLooping",
+                "namespace": "payments",
+                "image": "payments-api:v2.4.0",
+            }
+        }
+        alert = normalize_alertmanager_payload(raw)
+        assert alert.image_tag == "payments-api:v2.4.0"
+
+    def test_image_tag_accepts_alternate_label_names(self):
+        """Exporters disagree on the label name; all the common spellings work."""
+        for label in ("image", "image_tag", "container_image"):
+            alert = normalize_alertmanager_payload(
+                {"labels": {"alertname": "X", "namespace": "ns", label: "svc:v1"}}
+            )
+            assert alert.image_tag == "svc:v1", f"{label} was not picked up"
+
+    def test_image_labels_do_not_leak_into_extra(self):
+        alert = normalize_alertmanager_payload(
+            {"labels": {"alertname": "X", "namespace": "ns", "image": "svc:v1"}}
+        )
+        assert "image" not in alert.extra
+
+    def test_image_tag_absent_when_no_label(self):
+        alert = normalize_alertmanager_payload(
+            {"labels": {"alertname": "X", "namespace": "ns"}}
+        )
+        assert alert.image_tag is None
+
     def test_severity_mapping(self):
         cases = [
             ("critical", Severity.CRITICAL),

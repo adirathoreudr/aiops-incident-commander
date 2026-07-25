@@ -9,6 +9,7 @@ All methods return a consistent result dict.
 from __future__ import annotations
 
 import logging
+import math
 import os
 from typing import Any
 
@@ -17,7 +18,16 @@ from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.exceptions import ApiException
 
+from .policy import MAX_REPLICAS, MIN_REPLICAS
+
 log = logging.getLogger("executor.actions")
+
+# How much to grow a deployment by when a scale_up recommendation arrives with
+# no explicit replica count. Models routinely omit the number even though the
+# prompt asks for it, and refusing to act on that is how every scale_up ends up
+# failing. A 1.5x step is large enough to relieve saturation and small enough
+# that the policy ceiling stays the real limit.
+SCALE_UP_FACTOR = 1.5
 
 ARGOCD_SERVER = os.getenv(
     "ARGOCD_SERVER", "http://argocd-server.argocd.svc.cluster.local"
@@ -73,6 +83,7 @@ class ActionDispatcher:
             deployment=deployment,
             replicas=replicas,
             argocd_app=argocd_app or deployment,
+            action_type=action_type,
         )
 
     # ── Actions ───────────────────────────────────────────────────────────────
@@ -116,17 +127,68 @@ class ActionDispatcher:
             log.exception(msg)
             return {"success": False, "message": msg, "action": "rollout_restart"}
 
+    def _current_replicas(self, namespace: str, deployment: str) -> int | None:
+        """Read the deployment's desired replica count, or None if unreadable."""
+        try:
+            dep = k8s_client.AppsV1Api().read_namespaced_deployment(
+                name=deployment, namespace=namespace
+            )
+            return dep.spec.replicas
+        except Exception as e:
+            log.warning(
+                "Could not read current replicas for %s/%s: %s",
+                namespace,
+                deployment,
+                e,
+            )
+            return None
+
     async def _scale(
-        self, namespace: str, deployment: str, replicas: int | None, **_
+        self,
+        namespace: str,
+        deployment: str,
+        replicas: int | None,
+        action_type: str = "scale_up",
+        **_,
     ) -> dict:
         """
         kubectl scale deployment/<name> --replicas=N -n <namespace>
+
+        When no target is supplied we derive one for scale_up from the current
+        replica count. scale_down is deliberately not derived: guessing how far
+        to shed capacity is how an incident becomes an outage, so an explicit
+        number is required.
         """
         if replicas is None:
-            return {
-                "success": False,
-                "message": "replicas parameter required for scale action",
-            }
+            if action_type == "scale_down":
+                return {
+                    "success": False,
+                    "message": "explicit replicas required for scale_down",
+                    "action": "scale",
+                }
+
+            current = self._current_replicas(namespace, deployment)
+            if current is None:
+                return {
+                    "success": False,
+                    "message": (
+                        "no replicas supplied and current replica count could "
+                        f"not be read for {namespace}/{deployment}"
+                    ),
+                    "action": "scale",
+                }
+
+            replicas = max(
+                MIN_REPLICAS,
+                min(MAX_REPLICAS, math.ceil((current or 1) * SCALE_UP_FACTOR)),
+            )
+            log.info(
+                "No replica target supplied for %s/%s — derived %d from current %s",
+                namespace,
+                deployment,
+                replicas,
+                current,
+            )
         try:
             apps_v1 = k8s_client.AppsV1Api()
             patch = {"spec": {"replicas": replicas}}

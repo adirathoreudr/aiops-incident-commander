@@ -18,8 +18,8 @@ from prometheus_client import Counter, Histogram, generate_latest
 import redis.asyncio as aioredis
 from starlette.responses import Response
 
-from .audit import AuditLogger
-from .reasoner import IncidentReasoner
+from .audit import AuditLogger, read_audit
+from .reasoner import AUTO_EXECUTE_THRESHOLD, IncidentReasoner
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -93,11 +93,15 @@ async def trigger_reasoning(incident_id: str):
 
 @app.get("/audit/{incident_id}")
 async def get_audit(incident_id: str):
-    """Return full audit log for an incident."""
-    raw = await redis_client.get(f"audit:{incident_id}")
-    if not raw:
-        return {"entries": []}
-    return json.loads(raw)
+    """
+    Full audit log for an incident, oldest first.
+
+    Always ``{"entries": [...]}``; this previously returned a bare list when
+    populated and a wrapped object when empty, so any caller that handled one
+    shape broke on the other. The executor serves the same data and owns the
+    reads the dashboard uses — this endpoint remains for direct inspection.
+    """
+    return {"entries": await read_audit(redis_client, incident_id)}
 
 
 # ── Queue worker ──────────────────────────────────────────────────────────────
@@ -133,11 +137,15 @@ async def queue_worker() -> None:
             # Store audit record
             await auditor.record(incident_id, result)
 
-            # If auto-executable action, enqueue executor
+            # If auto-executable action, enqueue executor. The threshold comes
+            # from the reasoner rather than a literal so that raising
+            # AUTO_EXECUTE_THRESHOLD tightens both gates at once — a local 0.7
+            # here would silently keep admitting work the reasoner had already
+            # decided needed a human.
             if (
                 not result.get("requires_approval")
                 and result.get("recommended_action")
-                and result.get("confidence_score", 0) >= 0.7
+                and result.get("confidence_score", 0) >= AUTO_EXECUTE_THRESHOLD
             ):
                 await redis_client.lpush("executor:queue", incident_id)
                 log.info("Enqueued incident %s for auto-execution", incident_id)

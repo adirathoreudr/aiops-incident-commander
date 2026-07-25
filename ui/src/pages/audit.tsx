@@ -4,7 +4,7 @@ import AuditTimeline from '@/components/AuditTimeline'
 import { useAudit } from '@/lib/api'
 
 export default function AuditPage() {
-  const { entries } = useAudit()
+  const { entries, isLoading, error } = useAudit()
 
   return (
     <Layout>
@@ -13,7 +13,7 @@ export default function AuditPage() {
           AUDIT LOG
         </h1>
         <p className="font-mono text-xs text-ink-muted mt-1">
-          Immutable record of every AI decision, action, and approval — {entries.length} entries
+          Append-only record of every AI decision, action, and approval — {entries.length} entries
         </p>
       </div>
 
@@ -22,7 +22,23 @@ export default function AuditPage() {
           <p className="font-mono text-2xs tracking-widest text-amber-500/80">◈ ALL EVENTS — NEWEST FIRST</p>
           <span className="font-mono text-2xs text-ink-muted ml-auto">30-day retention</span>
         </div>
-        <AuditTimeline entries={entries} />
+
+        {error ? (
+          <div className="py-8 text-center">
+            <p className="font-mono text-2xl text-red-400 mb-2">⚠</p>
+            <p className="font-mono text-xs text-red-400 tracking-widest mb-2">CANNOT REACH EXECUTOR</p>
+            <p className="font-mono text-2xs text-ink-muted">
+              {error.message} — an empty log here means the audit service is
+              unreachable, not that no actions were taken.
+            </p>
+          </div>
+        ) : isLoading ? (
+          <p className="font-mono text-xs text-ink-muted py-8 text-center animate-pulse">
+            LOADING AUDIT TRAIL<span className="cursor" />
+          </p>
+        ) : (
+          <AuditTimeline entries={entries} />
+        )}
       </div>
 
       {/* Compliance note */}
@@ -30,7 +46,7 @@ export default function AuditPage() {
         <p className="font-mono text-2xs text-ink-muted leading-relaxed">
           <span className="text-amber-500/70">◈ COMPLIANCE: </span>
           Every automated action records: timestamp (UTC), incident ID, action type, target resource, actor (executor or approver name), success status, and outcome message.
-          No action is executed without a corresponding audit entry. Records are append-only with 30-day retention in Redis and optionally streamed to S3.
+          No action is executed without a corresponding audit entry. Entries are appended atomically to a Redis list — writers cannot overwrite each other — with 30-day retention.
         </p>
       </div>
     </Layout>

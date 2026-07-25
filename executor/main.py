@@ -26,9 +26,10 @@ import redis.asyncio as aioredis
 from starlette.responses import Response
 
 from .actions import ActionDispatcher
+from .audit import AuditLogger, read_audit, read_recent_audit
 from .health import HealthChecker
 from .meta import MetaRouter
-from .policy import PolicyEngine
+from .policy import Decision, PolicyEngine
 
 log = logging.getLogger("executor")
 logging.basicConfig(
@@ -121,15 +122,11 @@ async def approve_action(req: ApprovalRequest):
     incident = json.loads(raw)
 
     # Audit the approval decision
-    await _append_audit(
+    await AuditLogger(redis_client).record_approval(
         req.incident_id,
-        {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "event_type": "approval_decision",
-            "approved": req.approved,
-            "approver": req.approver,
-            "action_type": incident.get("recommended_action"),
-        },
+        approved=req.approved,
+        approver=req.approver,
+        action_type=incident.get("recommended_action"),
     )
 
     if req.approved:
@@ -163,10 +160,18 @@ async def manual_execute(req: ManualActionRequest):
     policy = PolicyEngine()
     dispatcher = ActionDispatcher()
 
-    allowed, reason = policy.check(
-        req.action_type, req.namespace, req.deployment, confidence=1.0
+    # An operator called this endpoint directly, so the action is approved by
+    # definition — but the hard rules (allowlist, blocked namespaces, scale
+    # bounds) still apply, which is what evaluate() enforces regardless.
+    decision, reason = policy.evaluate(
+        req.action_type,
+        req.namespace,
+        req.deployment,
+        confidence=1.0,
+        replicas=req.replicas,
+        approved=True,
     )
-    if not allowed:
+    if decision is not Decision.ALLOW:
         actions_blocked.inc()
         raise HTTPException(403, f"Policy blocked action: {reason}")
 
@@ -178,17 +183,14 @@ async def manual_execute(req: ManualActionRequest):
             replicas=req.replicas,
         )
 
-    await _append_audit(
+    await AuditLogger(redis_client).record_action(
         req.incident_id,
-        {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "event_type": "action_executed",
-            "action_type": req.action_type,
-            "target": f"{req.namespace}/{req.deployment}",
-            "actor": req.approver,
-            "success": result["success"],
-            "result": result["message"],
-        },
+        action_type=req.action_type,
+        target=f"{req.namespace}/{req.deployment}",
+        actor=req.approver,
+        success=result["success"],
+        result=result["message"],
+        params={"replicas": req.replicas} if req.replicas is not None else {},
     )
 
     actions_executed.labels(
@@ -199,8 +201,13 @@ async def manual_execute(req: ManualActionRequest):
 
 @app.get("/incidents/{incident_id}/audit")
 async def get_audit(incident_id: str):
-    raw = await redis_client.get(f"audit:{incident_id}")
-    return {"entries": json.loads(raw) if raw else []}
+    return {"entries": await read_audit(redis_client, incident_id)}
+
+
+@app.get("/audit")
+async def get_recent_audit(limit: int = 50):
+    """Audit entries across all incidents, newest first — the global feed."""
+    return {"entries": await read_recent_audit(redis_client, limit)}
 
 
 # ── Worker ────────────────────────────────────────────────────────────────────
@@ -210,6 +217,7 @@ async def executor_worker() -> None:
     policy = PolicyEngine()
     dispatcher = ActionDispatcher()
     checker = HealthChecker()
+    auditor = AuditLogger(redis_client)
 
     log.info("Executor worker started")
     while True:
@@ -225,20 +233,43 @@ async def executor_worker() -> None:
 
             incident = json.loads(raw)
             action_type = incident.get("recommended_action", "notify_only")
-            params = incident.get("recommended_action_params", {})
+            params = incident.get("recommended_action_params") or {}
             namespace = params.get("namespace") or incident.get("namespace", "default")
             deployment = params.get("deployment") or incident.get("deployment", "")
             confidence = incident.get("confidence_score", 0.0)
+            replicas = params.get("replicas")
 
-            # Final policy gate
-            allowed, reason = policy.check(
-                action_type, namespace, deployment, confidence
+            # Final policy gate. An incident carrying approved_by reached this
+            # queue because a human signed off, so the gate must not re-apply
+            # the checks whose entire purpose was to summon that human — the
+            # hard rules still apply either way.
+            approved = bool(incident.get("approved_by"))
+            decision, reason = policy.evaluate(
+                action_type,
+                namespace,
+                deployment,
+                confidence,
+                replicas,
+                approved=approved,
             )
-            if not allowed:
+
+            if decision is Decision.BLOCK:
                 actions_blocked.inc()
                 log.warning("Action blocked by policy for %s: %s", incident_id, reason)
                 incident["status"] = "escalated"
                 incident["policy_block_reason"] = reason
+                await redis_client.setex(
+                    f"incident:{incident_id}", 3600, json.dumps(incident)
+                )
+                continue
+
+            if decision is Decision.REQUIRE_APPROVAL:
+                log.info(
+                    "Incident %s awaiting human approval: %s", incident_id, reason
+                )
+                incident["status"] = "in_triage"
+                incident["requires_approval"] = True
+                incident["approval_reason"] = reason
                 await redis_client.setex(
                     f"incident:{incident_id}", 3600, json.dumps(incident)
                 )
@@ -257,7 +288,7 @@ async def executor_worker() -> None:
                     action_type=action_type,
                     namespace=namespace,
                     deployment=deployment,
-                    replicas=params.get("replicas"),
+                    replicas=replicas,
                 )
 
             actions_executed.labels(
@@ -284,18 +315,15 @@ async def executor_worker() -> None:
             )
 
             # Audit
-            await _append_audit(
+            await auditor.record_action(
                 incident_id,
-                {
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "event_type": "action_executed",
-                    "action_type": action_type,
-                    "target": f"{namespace}/{deployment}",
-                    "actor": "executor",
-                    "success": result["success"],
-                    "result": result["message"],
-                    "recovered": result.get("recovered"),
-                },
+                action_type=action_type,
+                target=f"{namespace}/{deployment}",
+                actor="executor",
+                success=result["success"],
+                result=result["message"],
+                params={"replicas": replicas} if replicas is not None else {},
+                recovered=result.get("recovered"),
             )
 
             log.info(
@@ -311,14 +339,3 @@ async def executor_worker() -> None:
         except Exception as e:
             log.exception("Executor worker error: %s", e)
             await asyncio.sleep(1.0)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-async def _append_audit(incident_id: str, entry: dict) -> None:
-    key = f"audit:{incident_id}"
-    raw = await redis_client.get(key)
-    log_ = json.loads(raw) if raw else []
-    log_.append(entry)
-    await redis_client.setex(key, 86400 * 30, json.dumps(log_))

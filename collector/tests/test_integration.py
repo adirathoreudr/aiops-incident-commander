@@ -23,6 +23,10 @@ def client():
     mock_redis.get = AsyncMock(return_value=None)
     mock_redis.setex = AsyncMock(return_value=True)
     mock_redis.lpush = AsyncMock(return_value=1)
+    # Incident ordering is served from a sorted set rather than a keyspace scan.
+    mock_redis.zadd = AsyncMock(return_value=1)
+    mock_redis.zrem = AsyncMock(return_value=1)
+    mock_redis.zrevrange = AsyncMock(return_value=[])
 
     async def fake_from_url(*a, **kw):
         return mock_redis
@@ -163,3 +167,50 @@ class TestIncidentsList:
     def test_incidents_404_for_unknown(self, client):
         r = client.get("/incidents/nonexistent-id-xyz")
         assert r.status_code == 404
+
+    def test_incidents_served_in_index_order(self, client):
+        """
+        Order comes from the sorted set, newest first. Scanning incident:* and
+        sorting the keys would order by UUID — which looks like it works and is
+        actually arbitrary.
+        """
+        from collector import main as collector_main
+
+        stored = {
+            "incident:newer": '{"incident_id": "newer"}',
+            "incident:older": '{"incident_id": "older"}',
+        }
+        collector_main.redis_client.zrevrange = AsyncMock(
+            return_value=["newer", "older"]
+        )
+        collector_main.redis_client.get = AsyncMock(
+            side_effect=lambda key: stored.get(key)
+        )
+
+        r = client.get("/incidents")
+
+        assert [i["incident_id"] for i in r.json()["incidents"]] == ["newer", "older"]
+
+    def test_expired_incidents_are_pruned_from_the_index(self, client):
+        """
+        Incidents expire on a TTL but the index entry does not, so a stale ID
+        would otherwise accumulate forever and shrink the effective page size.
+        """
+        from collector import main as collector_main
+
+        collector_main.redis_client.zrevrange = AsyncMock(
+            return_value=["expired", "live"]
+        )
+        collector_main.redis_client.get = AsyncMock(
+            side_effect=lambda key: (
+                '{"incident_id": "live"}' if key == "incident:live" else None
+            )
+        )
+        collector_main.redis_client.zrem = AsyncMock(return_value=1)
+
+        r = client.get("/incidents")
+
+        assert [i["incident_id"] for i in r.json()["incidents"]] == ["live"]
+        collector_main.redis_client.zrem.assert_awaited_once_with(
+            collector_main.INCIDENT_INDEX_KEY, "expired"
+        )

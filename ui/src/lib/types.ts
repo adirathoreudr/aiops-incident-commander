@@ -70,12 +70,17 @@ export interface AuditEntry {
   approver?: string
 }
 
+/**
+ * Counts derived from the incidents currently retained.
+ *
+ * Only quantities the platform can actually compute belong here. MTTR
+ * improvement, alert-noise reduction and auto-resolved rate used to live on
+ * this type and were populated with fixed literals in both demo and live
+ * paths — the platform has never measured any of them.
+ */
 export interface DashboardStats {
   total_open: number
   critical_count: number
-  resolved_today: number
-  avg_resolution_minutes: number
-  noise_reduction_pct: number
-  auto_resolved_pct: number
-  mttr_improvement_pct: number
+  resolved: number
+  awaiting_approval: number
 }

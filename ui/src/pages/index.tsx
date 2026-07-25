@@ -19,7 +19,7 @@ const PHASES = [
   { num: '02', title: 'AI Reasoning',            desc: 'LangChain agent retrieves similar incidents + runbooks via FAISS, prompts LLM with structured evidence, returns typed hypothesis' },
   { num: '03', title: 'Policy Gate',             desc: 'Confidence threshold check, namespace allowlist, action allowlist. High-risk actions route to human approval queue' },
   { num: '04', title: 'Safe Remediation',        desc: 'Kubernetes Python client executes restart/scale. ArgoCD REST API triggers rollback. Post-action health polling confirms recovery' },
-  { num: '05', title: 'Audit & Observability',   desc: 'Every prompt, decision, approval, and action appended to immutable audit log. Prometheus metrics on all services' },
+  { num: '05', title: 'Audit & Observability',   desc: 'Every decision, approval, and action appended atomically to a Redis list, so concurrent writers cannot overwrite each other. Prometheus metrics on all services' },
 ]
 
 export default function Home() {
@@ -44,7 +44,8 @@ export default function Home() {
           </h1>
           <p className="font-mono text-sm text-ink-secondary mt-6 max-w-xl leading-relaxed">
             AI-powered incident detection, root-cause analysis, and safe remediation for Kubernetes.
-            Reduces MTTR by 50%+. Cuts alert noise by 40%. Resolves 60%+ of common incidents without shell access.
+            Alerts are correlated into incidents, reasoned over with cited evidence, and remediated
+            through an allowlist of reversible actions — with every decision recorded.
           </p>
 
           <div className="flex items-center gap-4 mt-8">
@@ -52,10 +53,10 @@ export default function Home() {
               href="/dashboard"
               className="font-mono text-xs px-5 py-2.5 bg-amber-400 text-surface-base font-semibold tracking-widest hover:bg-amber-300 transition-colors"
             >
-              ▶ LIVE DEMO
+              ▶ OPEN DASHBOARD
             </Link>
             <a
-              href="https://github.com/your-org/aiops-incident-commander"
+              href="https://github.com/adirathoreudr/aiops-incident-commander"
               target="_blank" rel="noreferrer"
               className="font-mono text-xs px-5 py-2.5 border border-surface-border text-ink-secondary hover:text-ink-primary hover:border-amber-400/40 transition-all tracking-widest"
             >
@@ -65,44 +66,20 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Live stats */}
+      {/* Current state, counted from the incidents the collector is holding.
+          This block used to advertise MTTR improvement, alert-noise reduction
+          and an auto-resolved rate under a heading that read LIVE. Every one of
+          those numbers was a hardcoded literal — nothing in the platform has
+          ever measured them. */}
       <section className="mb-16">
         <p className="font-mono text-2xs tracking-[0.25em] text-ink-muted uppercase mb-4">
-          ◈ PLATFORM METRICS — LIVE
+          ◈ CURRENT STATE
         </p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard
-            label="MTTR IMPROVEMENT"
-            value={stats.mttr_improvement_pct}
-            unit="%"
-            accent="green"
-            delta="vs baseline"
-            deltaPositive
-            sub="simulated incidents"
-          />
-          <StatCard
-            label="ALERT NOISE CUT"
-            value={stats.noise_reduction_pct}
-            unit="%"
-            accent="amber"
-            delta="via dedup + grouping"
-            deltaPositive
-            sub="dedup + grouping"
-          />
-          <StatCard
-            label="AUTO-RESOLVED"
-            value={stats.auto_resolved_pct}
-            unit="%"
-            accent="blue"
-            sub="no manual shell access"
-          />
-          <StatCard
-            label="AVG RESOLUTION"
-            value={stats.avg_resolution_minutes}
-            unit="min"
-            accent="amber"
-            sub="triage to close"
-          />
+          <StatCard label="OPEN"      value={stats.total_open}        accent="red"   sub="active incidents" />
+          <StatCard label="CRITICAL"  value={stats.critical_count}    accent="red"   sub="need attention" />
+          <StatCard label="AWAITING"  value={stats.awaiting_approval} accent="amber" sub="need approval" />
+          <StatCard label="RESOLVED"  value={stats.resolved}          accent="green" sub="in retained window" />
         </div>
       </section>
 
@@ -172,12 +149,12 @@ export default function Home() {
         </p>
         <div className="grid md:grid-cols-2 gap-3">
           {[
-            ['◎', 'Reduces MTTR', '50%+ reduction in mean time to resolve in simulated incidents'],
-            ['◎', 'Cuts alert noise', '40%+ via deduplication and grouping of related alerts'],
-            ['◎', 'Autonomous resolution', '60%+ of common incidents resolved without manual shell access'],
-            ['◎', 'Auditability', 'Every prompt, decision, approval, and action logged with full traceability'],
-            ['◎', 'Human control preserved', 'High-risk actions require explicit approval. Agent cannot call arbitrary tools.'],
-            ['◎', 'Policy-gated execution', 'Allowlist-only actions. Blocked namespaces. Confidence thresholds enforced.'],
+            ['◎', 'Alert correlation', 'Related alerts are fingerprinted and grouped into a single incident rather than paging separately'],
+            ['◎', 'Evidence-backed triage', 'Root-cause hypotheses cite the specific logs, alerts and rollout events they rest on'],
+            ['◎', 'Auditability', 'Every decision, approval, and action appended atomically to a log writers cannot overwrite'],
+            ['◎', 'Human control preserved', 'High-risk actions require explicit approval, and the model can only ever escalate to review, never away from it'],
+            ['◎', 'Policy-gated execution', 'Allowlist-only actions. Blocked namespaces. Confidence thresholds enforced. Approval is not an override.'],
+            ['◎', 'No shell access required', 'Remediation is limited to reversible, parameterised actions through the Kubernetes API'],
           ].map(([icon, title, desc]) => (
             <div key={title as string} className="border-crt p-4 card-hover flex gap-3">
               <span className="text-amber-400 font-mono text-sm mt-0.5 shrink-0">{icon}</span>
@@ -201,7 +178,7 @@ export default function Home() {
           See it in action
         </h2>
         <p className="font-mono text-sm text-ink-secondary mb-8 max-w-md mx-auto">
-          Open the live incident dashboard to see AI triage, confidence scoring, and remediation decisions on simulated Kubernetes incidents.
+          Open the incident dashboard to see live AI triage, confidence scoring, and remediation decisions from the collector.
         </p>
         <Link
           href="/dashboard"

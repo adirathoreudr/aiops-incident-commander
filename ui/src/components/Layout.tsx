@@ -2,6 +2,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { clsx } from 'clsx'
+import { useIncidents } from '@/lib/api'
 
 const NAV = [
   { href: '/',          label: 'OVERVIEW' },
@@ -11,6 +12,7 @@ const NAV = [
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { pathname } = useRouter()
+  const { error } = useIncidents()
 
   return (
     <div className="min-h-screen bg-grid" style={{ backgroundSize: '40px 40px' }}>
@@ -51,10 +53,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
 
-          {/* Right: live indicator */}
+          {/* Right: connection indicator. Reflects whether the collector is
+              actually answering — a status light that reads LIVE regardless of
+              backend state tells an operator nothing. SWR dedupes this against
+              the pages' own fetch, so it costs no extra request. */}
           <div className="ml-auto flex items-center gap-2">
-            <span className="pulse-dot text-emerald-400" style={{ background: '#22c55e' }} />
-            <span className="font-mono text-2xs text-ink-muted tracking-widest">LIVE</span>
+            <span
+              className={clsx('pulse-dot', error ? 'text-red-400' : 'text-emerald-400')}
+              style={{ background: error ? '#ff3b3b' : '#22c55e' }}
+            />
+            <span className={clsx(
+              'font-mono text-2xs tracking-widest',
+              error ? 'text-red-400' : 'text-ink-muted'
+            )}>
+              {error ? 'DISCONNECTED' : 'LIVE'}
+            </span>
             <span className="font-mono text-2xs text-ink-muted ml-4 hidden sm:block">
               {new Date().toUTCString().slice(0, 25)}Z
             </span>
@@ -62,13 +75,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      {/* Demo banner */}
+      {/* Source banner. This previously read "DEMO MODE — simulated incident
+          data"; every page now renders whatever the collector is actually
+          holding, so the banner would be asserting the opposite of the truth. */}
       <div className="border-b" style={{ borderColor: 'rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.05)' }}>
         <div className="max-w-screen-xl mx-auto px-6 py-1.5 flex items-center gap-3">
-          <span className="font-mono text-2xs text-amber-500 tracking-widest">◈ DEMO MODE</span>
-          <span className="font-mono text-2xs text-ink-muted">Simulated incident data — no live cluster required</span>
+          <span className="font-mono text-2xs text-amber-500 tracking-widest">◈ LIVE DATA</span>
+          <span className="font-mono text-2xs text-ink-muted">
+            Incidents served by the collector — an empty feed means no incidents, not a demo
+          </span>
           <a
-            href="https://github.com/your-org/aiops-incident-commander"
+            href="https://github.com/adirathoreudr/aiops-incident-commander"
             target="_blank" rel="noreferrer"
             className="ml-auto font-mono text-2xs text-amber-500/70 hover:text-amber-400 transition-colors tracking-wide"
           >
