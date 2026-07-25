@@ -18,7 +18,7 @@ from prometheus_client import Counter, Histogram, generate_latest
 import redis.asyncio as aioredis
 from starlette.responses import Response
 
-from .audit import AuditLogger
+from .audit import AuditLogger, read_audit
 from .reasoner import AUTO_EXECUTE_THRESHOLD, IncidentReasoner
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -93,11 +93,15 @@ async def trigger_reasoning(incident_id: str):
 
 @app.get("/audit/{incident_id}")
 async def get_audit(incident_id: str):
-    """Return full audit log for an incident."""
-    raw = await redis_client.get(f"audit:{incident_id}")
-    if not raw:
-        return {"entries": []}
-    return json.loads(raw)
+    """
+    Full audit log for an incident, oldest first.
+
+    Always ``{"entries": [...]}``; this previously returned a bare list when
+    populated and a wrapped object when empty, so any caller that handled one
+    shape broke on the other. The executor serves the same data and owns the
+    reads the dashboard uses — this endpoint remains for direct inspection.
+    """
+    return {"entries": await read_audit(redis_client, incident_id)}
 
 
 # ── Queue worker ──────────────────────────────────────────────────────────────

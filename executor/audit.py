@@ -1,7 +1,12 @@
 """
-agent/audit.py
-Append-only audit log. Every decision, action, and outcome is stored in Redis
-with a TTL and can be retrieved for compliance review.
+executor/audit.py
+Audit writer and reader for the executor.
+
+This mirrors agent/audit.py deliberately. The two services build from separate
+Docker contexts (each Dockerfile copies only its own directory), so neither can
+import from the other; the storage contract is the shared thing, not the code.
+If the build contexts are ever unified, these two modules should collapse into
+one package.
 
 ## Storage contract
 
@@ -10,21 +15,12 @@ JSON-encoded entry per element, oldest first.
 
 A list rather than a JSON blob because the agent and the executor both write to
 the same key from separate processes. Read-modify-write (GET, append, SET) loses
-an entry whenever the two interleave — both read the same state and the second
-write overwrites the first. RPUSH is a single atomic operation, so concurrent
-writers cannot clobber each other. "Append-only" is then a property of the data
-structure rather than a claim in the docs.
+an entry whenever the two interleave. RPUSH is atomic, so concurrent writers
+cannot clobber each other.
 
-Every entry carries:
-  ts            ISO-8601 UTC timestamp
-  incident_id   the incident this entry belongs to
-  event_type    one of EVENT_TYPES — the dashboard switches on this to decide
-                what to render, so an entry without one displays as a blank row
-
-The executor writes the same shape from executor/audit.py. The two are separate
-files because each service builds from its own directory as the Docker context
-and cannot import from the other; if that changes, they should become one
-module.
+Every entry carries ``ts``, ``incident_id`` and an ``event_type`` drawn from
+EVENT_TYPES — the dashboard switches on event_type to decide what to render, so
+an entry without one reaches the operator as a blank row.
 """
 
 from __future__ import annotations
@@ -37,12 +33,10 @@ from typing import Any
 import redis.asyncio as aioredis
 from redis.exceptions import ResponseError
 
-log = logging.getLogger("agent.audit")
+log = logging.getLogger("executor.audit")
 
 AUDIT_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
-# The event types the dashboard knows how to render. Anything outside this set
-# reaches the operator as an unlabelled row with none of its detail shown.
 EVENT_REASONING_COMPLETE = "reasoning_complete"
 EVENT_ACTION_EXECUTED = "action_executed"
 EVENT_APPROVAL_DECISION = "approval_decision"
@@ -50,6 +44,10 @@ EVENT_APPROVAL_DECISION = "approval_decision"
 EVENT_TYPES = frozenset(
     {EVENT_REASONING_COMPLETE, EVENT_ACTION_EXECUTED, EVENT_APPROVAL_DECISION}
 )
+
+# Written by the collector. The executor reads it to serve the global audit
+# feed in newest-first order without scanning the keyspace.
+INCIDENT_INDEX_KEY = "incidents:index"
 
 
 def audit_key(incident_id: str) -> str:
@@ -62,7 +60,7 @@ async def read_audit(redis: aioredis.Redis, incident_id: str) -> list[dict]:
 
     Handles keys still written in the pre-list format: LRANGE against a string
     raises WRONGTYPE, so fall back to parsing the old JSON blob rather than
-    presenting an operator with an empty compliance record.
+    showing an operator an empty compliance record.
     """
     key = audit_key(incident_id)
     try:
@@ -86,6 +84,24 @@ async def read_audit(redis: aioredis.Redis, incident_id: str) -> list[dict]:
     return entries
 
 
+async def read_recent_audit(redis: aioredis.Redis, limit: int = 50) -> list[dict]:
+    """
+    Return audit entries across all known incidents, newest first.
+
+    Walks the collector's incident index rather than scanning audit:* — KEYS is
+    O(N) and blocks the server, which is the wrong behaviour for a page an
+    operator opens during an incident.
+    """
+    incident_ids = await redis.zrevrange(INCIDENT_INDEX_KEY, 0, max(limit - 1, 0))
+
+    entries: list[dict] = []
+    for incident_id in incident_ids:
+        entries.extend(await read_audit(redis, incident_id))
+
+    entries.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    return entries[:limit]
+
+
 class AuditLogger:
     def __init__(self, redis: aioredis.Redis) -> None:
         self._redis = redis
@@ -93,41 +109,19 @@ class AuditLogger:
     async def _append(self, incident_id: str, entry: dict[str, Any]) -> None:
         key = audit_key(incident_id)
         await self._redis.rpush(key, json.dumps(entry))
-        # Refreshed on every append, so an incident that is still generating
-        # activity keeps its full history rather than expiring mid-investigation.
         await self._redis.expire(key, AUDIT_TTL_SECONDS)
-
-    async def record(self, incident_id: str, incident: dict[str, Any]) -> None:
-        """Append a reasoning outcome to the audit log for this incident."""
-        await self._append(
-            incident_id,
-            {
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "incident_id": incident_id,
-                "event_type": EVENT_REASONING_COMPLETE,
-                "status": incident.get("status"),
-                "incident_type": incident.get("incident_type"),
-                "probable_root_cause": incident.get("probable_root_cause"),
-                "confidence_score": incident.get("confidence_score"),
-                "recommended_action": incident.get("recommended_action"),
-                "requires_approval": incident.get("requires_approval"),
-                "supporting_evidence": incident.get("supporting_evidence", []),
-            },
-        )
-        log.info("Audit: reasoning recorded for incident %s", incident_id)
 
     async def record_action(
         self,
         incident_id: str,
         action_type: str,
         target: str,
-        params: dict,
+        actor: str,
         success: bool,
         result: str,
-        actor: str = "executor",
+        params: dict | None = None,
         recovered: bool | None = None,
     ) -> None:
-        """Record a remediation action execution."""
         await self._append(
             incident_id,
             {
@@ -136,7 +130,7 @@ class AuditLogger:
                 "event_type": EVENT_ACTION_EXECUTED,
                 "action_type": action_type,
                 "target": target,
-                "params": params,
+                "params": params or {},
                 "actor": actor,
                 "success": success,
                 "result": result,
@@ -149,7 +143,7 @@ class AuditLogger:
         incident_id: str,
         approved: bool,
         approver: str,
-        action_type: str,
+        action_type: str | None,
     ) -> None:
         await self._append(
             incident_id,

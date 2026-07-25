@@ -26,6 +26,7 @@ import redis.asyncio as aioredis
 from starlette.responses import Response
 
 from .actions import ActionDispatcher
+from .audit import AuditLogger, read_audit, read_recent_audit
 from .health import HealthChecker
 from .meta import MetaRouter
 from .policy import Decision, PolicyEngine
@@ -121,15 +122,11 @@ async def approve_action(req: ApprovalRequest):
     incident = json.loads(raw)
 
     # Audit the approval decision
-    await _append_audit(
+    await AuditLogger(redis_client).record_approval(
         req.incident_id,
-        {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "event_type": "approval_decision",
-            "approved": req.approved,
-            "approver": req.approver,
-            "action_type": incident.get("recommended_action"),
-        },
+        approved=req.approved,
+        approver=req.approver,
+        action_type=incident.get("recommended_action"),
     )
 
     if req.approved:
@@ -186,17 +183,14 @@ async def manual_execute(req: ManualActionRequest):
             replicas=req.replicas,
         )
 
-    await _append_audit(
+    await AuditLogger(redis_client).record_action(
         req.incident_id,
-        {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "event_type": "action_executed",
-            "action_type": req.action_type,
-            "target": f"{req.namespace}/{req.deployment}",
-            "actor": req.approver,
-            "success": result["success"],
-            "result": result["message"],
-        },
+        action_type=req.action_type,
+        target=f"{req.namespace}/{req.deployment}",
+        actor=req.approver,
+        success=result["success"],
+        result=result["message"],
+        params={"replicas": req.replicas} if req.replicas is not None else {},
     )
 
     actions_executed.labels(
@@ -207,8 +201,13 @@ async def manual_execute(req: ManualActionRequest):
 
 @app.get("/incidents/{incident_id}/audit")
 async def get_audit(incident_id: str):
-    raw = await redis_client.get(f"audit:{incident_id}")
-    return {"entries": json.loads(raw) if raw else []}
+    return {"entries": await read_audit(redis_client, incident_id)}
+
+
+@app.get("/audit")
+async def get_recent_audit(limit: int = 50):
+    """Audit entries across all incidents, newest first — the global feed."""
+    return {"entries": await read_recent_audit(redis_client, limit)}
 
 
 # ── Worker ────────────────────────────────────────────────────────────────────
@@ -218,6 +217,7 @@ async def executor_worker() -> None:
     policy = PolicyEngine()
     dispatcher = ActionDispatcher()
     checker = HealthChecker()
+    auditor = AuditLogger(redis_client)
 
     log.info("Executor worker started")
     while True:
@@ -315,18 +315,15 @@ async def executor_worker() -> None:
             )
 
             # Audit
-            await _append_audit(
+            await auditor.record_action(
                 incident_id,
-                {
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "event_type": "action_executed",
-                    "action_type": action_type,
-                    "target": f"{namespace}/{deployment}",
-                    "actor": "executor",
-                    "success": result["success"],
-                    "result": result["message"],
-                    "recovered": result.get("recovered"),
-                },
+                action_type=action_type,
+                target=f"{namespace}/{deployment}",
+                actor="executor",
+                success=result["success"],
+                result=result["message"],
+                params={"replicas": replicas} if replicas is not None else {},
+                recovered=result.get("recovered"),
             )
 
             log.info(
@@ -342,14 +339,3 @@ async def executor_worker() -> None:
         except Exception as e:
             log.exception("Executor worker error: %s", e)
             await asyncio.sleep(1.0)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-async def _append_audit(incident_id: str, entry: dict) -> None:
-    key = f"audit:{incident_id}"
-    raw = await redis_client.get(key)
-    log_ = json.loads(raw) if raw else []
-    log_.append(entry)
-    await redis_client.setex(key, 86400 * 30, json.dumps(log_))

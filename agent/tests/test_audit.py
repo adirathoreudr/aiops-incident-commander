@@ -1,19 +1,20 @@
 """
 Regression tests for agent/audit.py::AuditLogger.
 
-Two things matter about the audit trail, and neither is currently guaranteed.
+Two properties the audit trail has to hold, both of which it previously failed.
 
-1. Every entry needs an ``event_type``. The dashboard switches on it
-   (ui/src/components/AuditTimeline.tsx, EVENT_STYLES) to decide what to render.
-   AuditLogger.record — the entry describing the AI's reasoning, which is the
-   whole point of the audit tab — omits it, so it falls through to the default
-   style and displays as a bare "EVENT" row with no confidence, action or root
-   cause. The compliance copy on the audit page promises exactly those fields.
+1. Every entry carries an ``event_type``. The dashboard switches on it
+   (ui/src/components/AuditTimeline.tsx, EVENT_STYLES) to decide what to render,
+   so an entry without one displays as a bare "EVENT" row with no confidence,
+   action or root cause — precisely the fields the compliance copy promises.
 
-2. It has to actually be append-only. record() does GET -> append -> SETEX,
-   which is a full overwrite, and the executor runs the same read-modify-write
-   against the same key from a different process. Two concurrent writes lose
-   one entry. Phase 2 replaces this with RPUSH.
+2. It is genuinely append-only. GET/append/SETEX is a read-modify-write, and the
+   agent and executor run it against the same key from separate processes, so
+   two concurrent writes lose one entry. RPUSH is atomic and cannot.
+
+There is also a backward-compatibility obligation: keys written in the old
+JSON-blob format still have to be readable, since a Redis holding real audit
+history should not appear empty after a deploy.
 """
 
 from __future__ import annotations
@@ -27,11 +28,13 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from agent.audit import AuditLogger  # noqa: E402
+from redis.exceptions import ResponseError  # noqa: E402
 
-# Event types the dashboard knows how to render. Kept in sync by hand with
-# EVENT_STYLES in ui/src/components/AuditTimeline.tsx — anything the backend
-# emits that is not in this set renders as an unlabelled row.
+from agent.audit import EVENT_TYPES, AuditLogger, read_audit  # noqa: E402
+
+# Event types the dashboard knows how to render, mirroring EVENT_STYLES in
+# ui/src/components/AuditTimeline.tsx. Anything the backend emits outside this
+# set reaches the operator as an unlabelled row with none of its detail.
 UI_KNOWN_EVENT_TYPES = {
     "reasoning_complete",
     "action_executed",
@@ -41,33 +44,53 @@ UI_KNOWN_EVENT_TYPES = {
 
 class FakeRedis:
     """
-    A minimal stateful stand-in for Redis.
+    A minimal stateful stand-in for Redis covering the commands the audit log
+    uses.
 
-    Statefulness matters here: a plain AsyncMock returns None from every get(),
-    so each write starts from an empty list and the log appears to hold exactly
-    one entry no matter how many were written. That hides the very behaviour
-    these tests exist to check.
+    Statefulness matters: a plain AsyncMock returns None from every read, so
+    each write starts from nothing and the log appears to hold one entry no
+    matter how many were written — hiding the very behaviour under test.
 
-    get() yields control before returning so that two coroutines awaited
-    concurrently interleave the way two processes do — which is what makes the
-    lost-update test below a real race rather than a staged one.
+    The string commands (get/setex) model the legacy JSON-blob format, and
+    lrange raises WRONGTYPE against a string key exactly as Redis does, so the
+    backward-compatible read path is exercised for real.
+
+    get() reads before yielding because a real GET returns the value as of the
+    moment it ran; that ordering is what lets two coroutines awaited together
+    reproduce a genuine lost update rather than a staged one.
     """
 
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
+        self.lists: dict[str, list[str]] = {}
+        self.expirations: dict[str, int] = {}
 
+    # ── string commands (legacy format) ──
     async def get(self, key: str):
-        # Read first, then yield. A real GET returns the value as it stood when
-        # the command ran; whatever another writer does afterwards does not
-        # retroactively change what this caller was handed. Yielding before the
-        # read would let the second coroutine observe the first one's write and
-        # hide the lost update entirely.
         value = self.store.get(key)
         await asyncio.sleep(0)
         return value
 
     async def setex(self, key: str, ttl: int, value: str):
         self.store[key] = value
+        return True
+
+    # ── list commands (current format) ──
+    async def rpush(self, key: str, *values: str):
+        if key in self.store:
+            raise ResponseError("WRONGTYPE Operation against a key holding the wrong kind of value")
+        await asyncio.sleep(0)
+        self.lists.setdefault(key, []).extend(values)
+        return len(self.lists[key])
+
+    async def lrange(self, key: str, start: int, end: int):
+        if key in self.store:
+            raise ResponseError("WRONGTYPE Operation against a key holding the wrong kind of value")
+        items = self.lists.get(key, [])
+        return items[start:] if end == -1 else items[start : end + 1]
+
+    async def expire(self, key: str, ttl: int):
+        self.expirations[key] = ttl
         return True
 
 
@@ -77,9 +100,9 @@ def redis():
 
 
 def written_entries(redis, incident_id: str = "inc-1") -> list[dict]:
-    raw = redis.store.get(f"audit:{incident_id}")
+    raw = redis.lists.get(f"audit:{incident_id}")
     assert raw is not None, "nothing was persisted"
-    return json.loads(raw)
+    return [json.loads(r) for r in raw]
 
 
 def _reasoning_result() -> dict:
@@ -98,11 +121,6 @@ def _reasoning_result() -> dict:
 
 
 class TestEventTypeIsAlwaysPresent:
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 2: AuditLogger.record omits event_type, so reasoning "
-        "entries render as blank 'EVENT' rows with none of their detail.",
-    )
     async def test_reasoning_entry_has_event_type(self, redis):
         await AuditLogger(redis).record("inc-1", _reasoning_result())
 
@@ -113,7 +131,6 @@ class TestEventTypeIsAlwaysPresent:
         )
 
     async def test_action_entry_has_event_type(self, redis):
-        """Contrast: record_action does set it, which is why actions render."""
         await AuditLogger(redis).record_action(
             "inc-1",
             action_type="rollout_restart",
@@ -132,10 +149,6 @@ class TestEventTypeIsAlwaysPresent:
 
         assert written_entries(redis)[0]["event_type"] == "approval_decision"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 2: see test_reasoning_entry_has_event_type.",
-    )
     async def test_every_emitted_event_type_is_known_to_the_ui(self, redis):
         logger = AuditLogger(redis)
         await logger.record("inc-1", _reasoning_result())
@@ -156,6 +169,7 @@ class TestEventTypeIsAlwaysPresent:
             f"backend emits {emitted - UI_KNOWN_EVENT_TYPES} which the "
             "dashboard has no rendering for"
         )
+        assert emitted <= EVENT_TYPES, "backend disagrees with its own constant"
 
 
 # ── The trail must record what the compliance copy claims ─────────────────────
@@ -187,12 +201,6 @@ class TestAppendOnly:
 
         assert len(written_entries(redis)) == 2
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Phase 2: GET/append/SETEX is a read-modify-write, and the "
-        "executor runs the same cycle against the same key from another "
-        "process. Concurrent writes silently drop an entry.",
-    )
     async def test_concurrent_writers_do_not_lose_entries(self, redis):
         """
         Two writers reach the log at the same time — in production that is the
@@ -219,3 +227,43 @@ class TestAppendOnly:
         assert len(written_entries(redis)) == 2, (
             "one writer's entry was overwritten by the other"
         )
+
+    async def test_ttl_is_refreshed_on_each_append(self, redis):
+        """An incident still generating activity keeps its full history."""
+        await AuditLogger(redis).record("inc-1", _reasoning_result())
+        assert redis.expirations["audit:inc-1"] == 60 * 60 * 24 * 30
+
+
+# ── Reading back what earlier versions wrote ──────────────────────────────────
+
+
+class TestLegacyFormatCompatibility:
+    async def test_reads_entries_written_as_a_json_blob(self, redis):
+        """
+        A Redis carrying audit history from before the list migration must not
+        read as empty — an operator seeing a blank compliance record cannot tell
+        "nothing happened" from "we changed the storage format".
+        """
+        legacy = [
+            {"ts": "2026-07-25T10:00:00+00:00", "event_type": "action_executed"},
+            {"ts": "2026-07-25T10:00:04+00:00", "event_type": "approval_decision"},
+        ]
+        redis.store["audit:inc-legacy"] = json.dumps(legacy)
+
+        entries = await read_audit(redis, "inc-legacy")
+
+        assert [e["event_type"] for e in entries] == [
+            "action_executed",
+            "approval_decision",
+        ]
+
+    async def test_reads_current_format(self, redis):
+        await AuditLogger(redis).record("inc-1", _reasoning_result())
+
+        entries = await read_audit(redis, "inc-1")
+
+        assert len(entries) == 1
+        assert entries[0]["event_type"] == "reasoning_complete"
+
+    async def test_unknown_incident_reads_as_empty(self, redis):
+        assert await read_audit(redis, "no-such-incident") == []
