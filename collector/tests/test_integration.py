@@ -7,10 +7,18 @@ Patches are applied at the module level to prevent actual I/O.
 
 from __future__ import annotations
 
+import importlib
+import os
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 import pytest
+
+# The collector's write paths require a bearer token. These tests exercise the
+# real app, so they configure one and send it — see TestWriteEndpointsRequireAuth
+# for the unauthenticated cases.
+TEST_TOKEN = "integration-test-token"
+AUTH = {"Authorization": f"Bearer {TEST_TOKEN}"}
 
 # ── Patch Redis before importing app ─────────────────────────────────────────
 
@@ -18,6 +26,11 @@ import pytest
 @pytest.fixture(scope="module")
 def client():
     """Create a TestClient with all external deps mocked."""
+    os.environ["COLLECTOR_API_TOKEN"] = TEST_TOKEN
+    import collector.auth as auth_module
+
+    importlib.reload(auth_module)
+
     mock_redis = AsyncMock()
     mock_redis.keys = AsyncMock(return_value=[])
     mock_redis.get = AsyncMock(return_value=None)
@@ -85,12 +98,13 @@ class TestAlertmanagerWebhook:
         r = client.post(
             "/webhook/alertmanager",
             json=self._payload(),
+            headers=AUTH,
         )
         assert r.status_code == 200
         assert r.json()["status"] == "accepted"
 
     def test_webhook_empty_alerts_accepted(self, client):
-        r = client.post("/webhook/alertmanager", json={"alerts": []})
+        r = client.post("/webhook/alertmanager", json={"alerts": []}, headers=AUTH)
         assert r.status_code == 200
 
     def test_webhook_malformed_json_handled(self, client):
@@ -98,7 +112,7 @@ class TestAlertmanagerWebhook:
         r = client.post(
             "/webhook/alertmanager",
             content="not-json",
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **AUTH},
         )
         assert r.status_code in (200, 422)
 
@@ -110,6 +124,7 @@ class TestSimulate:
     def test_simulate_creates_incident(self, client):
         r = client.post(
             "/webhook/simulate",
+            headers=AUTH,
             json={
                 "title": "Test CrashLoop",
                 "alertname": "KubePodCrashLooping",
@@ -129,6 +144,7 @@ class TestSimulate:
         for sev in ["critical", "high", "warning", "info"]:
             r = client.post(
                 "/webhook/simulate",
+                headers=AUTH,
                 json={
                     "title": f"{sev} incident",
                     "severity": sev,
@@ -138,7 +154,7 @@ class TestSimulate:
             assert r.status_code == 200, f"Failed for severity={sev}"
 
     def test_simulate_minimal_payload(self, client):
-        r = client.post("/webhook/simulate", json={})
+        r = client.post("/webhook/simulate", json={}, headers=AUTH)
         assert r.status_code == 200
 
     def test_simulate_returns_uuid_incident_id(self, client):
@@ -146,6 +162,7 @@ class TestSimulate:
 
         r = client.post(
             "/webhook/simulate",
+            headers=AUTH,
             json={"title": "X", "severity": "info", "namespace": "ns"},
         )
         body = r.json()
@@ -157,7 +174,7 @@ class TestSimulate:
 
 class TestIncidentsList:
     def test_incidents_returns_list(self, client):
-        r = client.get("/incidents")
+        r = client.get("/incidents", headers=AUTH)
         assert r.status_code == 200
         body = r.json()
         assert "incidents" in body
@@ -165,7 +182,7 @@ class TestIncidentsList:
         assert isinstance(body["incidents"], list)
 
     def test_incidents_404_for_unknown(self, client):
-        r = client.get("/incidents/nonexistent-id-xyz")
+        r = client.get("/incidents/nonexistent-id-xyz", headers=AUTH)
         assert r.status_code == 404
 
     def test_incidents_served_in_index_order(self, client):
@@ -187,7 +204,7 @@ class TestIncidentsList:
             side_effect=lambda key: stored.get(key)
         )
 
-        r = client.get("/incidents")
+        r = client.get("/incidents", headers=AUTH)
 
         assert [i["incident_id"] for i in r.json()["incidents"]] == ["newer", "older"]
 
@@ -208,9 +225,64 @@ class TestIncidentsList:
         )
         collector_main.redis_client.zrem = AsyncMock(return_value=1)
 
-        r = client.get("/incidents")
+        r = client.get("/incidents", headers=AUTH)
 
         assert [i["incident_id"] for i in r.json()["incidents"]] == ["live"]
         collector_main.redis_client.zrem.assert_awaited_once_with(
             collector_main.INCIDENT_INDEX_KEY, "expired"
         )
+
+
+# ── Auth on the real app ──────────────────────────────────────────────────────
+
+
+class TestWriteEndpointsRequireAuth:
+    """
+    The unit tests in test_auth.py cover the dependency in isolation; these
+    confirm it is actually wired onto the endpoints that matter on the real app.
+    """
+
+    def test_simulate_rejects_missing_token(self, client):
+        r = client.post("/webhook/simulate", json={"title": "unauthorised"})
+        assert r.status_code == 401
+
+    def test_simulate_rejects_wrong_token(self, client):
+        r = client.post(
+            "/webhook/simulate",
+            json={"title": "unauthorised"},
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+        assert r.status_code == 401
+
+    def test_alertmanager_rejects_wrong_token_once_configured(self, client):
+        r = client.post(
+            "/webhook/alertmanager",
+            json={"alerts": []},
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+        assert r.status_code == 401
+
+    def test_incident_reads_require_the_token_once_configured(self):
+        """
+        Incident bodies carry captured log lines and root-cause text. Guarding
+        the executor's audit reads while leaving these open would protect
+        nothing — the same content is in both.
+        """
+        assert client_unauthenticated_get("/incidents") == 401
+        assert client_unauthenticated_get("/incidents/some-id") == 401
+
+    def test_probe_endpoints_stay_open(self, client):
+        """
+        Kubernetes liveness probes and Prometheus scrapes carry no credentials,
+        so these must never require one.
+        """
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/metrics").status_code == 200
+
+
+def client_unauthenticated_get(path: str) -> int:
+    """Status code for an unauthenticated GET against the running test app."""
+    from collector.main import app
+
+    with TestClient(app, raise_server_exceptions=False) as c:
+        return c.get(path).status_code

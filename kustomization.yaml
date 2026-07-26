@@ -1,0 +1,59 @@
+# kustomization.yaml
+#
+# Apply with:  kubectl apply -k .
+#
+# Lives at the repository root, not in manifests/, because kustomize refuses to
+# read files outside its own directory and the knowledge base it has to package
+# is a sibling of manifests/.
+#
+# Two jobs, both of which the previous plain-apply flow got wrong.
+#
+# 1. Generate the knowledge-base ConfigMaps. The agent mounts them as volumes,
+#    but nothing in the repository ever created them, so the agent pod could
+#    never leave ContainerCreating — the platform's central service was
+#    unstartable. Generating from knowledge-base/ also means editing a runbook
+#    changes the content hash, which rolls the agent automatically instead of
+#    leaving it serving stale runbooks.
+#
+#    Runbooks and incidents are separate ConfigMaps because ConfigMap keys
+#    cannot contain "/" — one combined map could not reproduce the
+#    runbooks/ and incidents/ subdirectories the agent reads.
+#
+# 2. Set image references. The deployment specs carry a REPLACE_WITH_ECR_URL
+#    placeholder that CD used to rewrite with sed. `images:` does it
+#    declaratively, so a mistyped registry fails here rather than producing a
+#    manifest that applies cleanly and pulls nothing.
+#
+# manifests/secret.example.yaml is deliberately absent: applying it would
+# overwrite the real credentials on every deploy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aiops
+
+resources:
+  - manifests/rbac/namespace-and-rbac.yaml
+  - manifests/network-policies/aiops-network-policies.yaml
+  - manifests/aiops-platform.yaml
+
+configMapGenerator:
+  - name: aiops-runbooks
+    files:
+      - knowledge-base/runbooks/rb-001-crashloop.json
+      - knowledge-base/runbooks/rb-002-oomkill.json
+      - knowledge-base/runbooks/rb-003-high-latency.json
+      - knowledge-base/runbooks/rb-004-deployment-regression.json
+      - knowledge-base/runbooks/rb-005-node-pressure.json
+  - name: aiops-incidents
+    files:
+      - knowledge-base/incidents/inc-001-crashloop-payments.json
+      - knowledge-base/incidents/inc-002-oom-orders.json
+      - knowledge-base/incidents/inc-003-latency-users.json
+
+images:
+  - name: REPLACE_WITH_ECR_URL/aiops-incident-commander/collector
+    newTag: latest
+  - name: REPLACE_WITH_ECR_URL/aiops-incident-commander/agent
+    newTag: latest
+  - name: REPLACE_WITH_ECR_URL/aiops-incident-commander/executor
+    newTag: latest

@@ -12,7 +12,12 @@ from typing import Any
 
 SYSTEM_PROMPT = """\
 You are a senior SRE incident analyst. Your role is to triage Kubernetes incidents
-using only the evidence provided — logs, metrics, alerts, and rollout history.
+using only the evidence provided — alerts, logs, and rollout history.
+
+You will not be given metrics. Do not cite metric values, rates, or thresholds:
+anything numeric that does not appear verbatim in the context below is invented,
+and an invented number in a root cause is worse than an admission of
+uncertainty.
 
 ## Rules
 1. You MUST cite specific evidence from the incident context for every claim you make.
@@ -34,7 +39,7 @@ using only the evidence provided — logs, metrics, alerts, and rollout history.
   "probable_root_cause": "<1-3 sentence explanation citing specific evidence>",
   "confidence_score": <0.0-1.0>,
   "supporting_evidence": [
-    "<evidence item 1 from logs/metrics/alerts>",
+    "<evidence item 1, quoting the alert, log line, or rollout event it rests on>",
     "<evidence item 2>",
     "<evidence item 3 if available>"
   ],

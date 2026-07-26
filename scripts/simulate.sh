@@ -11,6 +11,13 @@ set -euo pipefail
 SCENARIO="${1:-crashloop}"
 COLLECTOR_URL="${2:-http://localhost:8000}"
 NAMESPACE="${3:-staging}"
+EXECUTOR_URL="${EXECUTOR_URL:-http://localhost:8002}"
+
+# /webhook/simulate requires a bearer token — it enqueues an incident that can
+# be auto-remediated, so it is a write path. docker-compose sets this default;
+# override COLLECTOR_API_TOKEN to match your environment.
+COLLECTOR_API_TOKEN="${COLLECTOR_API_TOKEN:-dev-collector-token}"
+AUTH_HEADER="Authorization: Bearer ${COLLECTOR_API_TOKEN}"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 AMBER='\033[0;33m'
@@ -102,7 +109,12 @@ ok "Collector is healthy"
 step "Injecting ${SCENARIO} incident..."
 RESPONSE=$(curl -sf -X POST "${COLLECTOR_URL}/webhook/simulate" \
   -H "Content-Type: application/json" \
-  -d "${PAYLOADS[$SCENARIO]}")
+  -H "${AUTH_HEADER}" \
+  -d "${PAYLOADS[$SCENARIO]}") || {
+  echo -e "${RED}Injection failed.${RESET} If this is a 401, COLLECTOR_API_TOKEN"
+  echo "does not match the collector's. If 503, the collector has no token set."
+  exit 1
+}
 
 INCIDENT_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('incident_id','unknown'))" 2>/dev/null || echo "unknown")
 ok "Incident created: ${AMBER}${INCIDENT_ID}${RESET}"
@@ -112,7 +124,7 @@ step "Waiting for agent to reason (up to 30s)..."
 TIMEOUT=30
 ELAPSED=0
 while [[ $ELAPSED -lt $TIMEOUT ]]; do
-  INCIDENT=$(curl -sf "${COLLECTOR_URL}/incidents/${INCIDENT_ID}" 2>/dev/null || echo "{}")
+  INCIDENT=$(curl -sf -H "${AUTH_HEADER}" "${COLLECTOR_URL}/incidents/${INCIDENT_ID}" 2>/dev/null || echo "{}")
   STATUS=$(echo "$INCIDENT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
   if [[ "$STATUS" == "in_triage" || "$STATUS" == "remediating" || "$STATUS" == "resolved" ]]; then
     break
@@ -124,7 +136,7 @@ done
 echo ""
 
 # 4. Print result
-INCIDENT=$(curl -sf "${COLLECTOR_URL}/incidents/${INCIDENT_ID}" 2>/dev/null || echo "{}")
+INCIDENT=$(curl -sf -H "${AUTH_HEADER}" "${COLLECTOR_URL}/incidents/${INCIDENT_ID}" 2>/dev/null || echo "{}")
 
 ROOT_CAUSE=$(echo "$INCIDENT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('probable_root_cause','(not yet available)')[:200])" 2>/dev/null || echo "")
 CONFIDENCE=$(echo "$INCIDENT" | python3 -c "import sys,json; d=json.load(sys.stdin); c=d.get('confidence_score'); print(f'{round(c*100)}%' if c else 'n/a')" 2>/dev/null || echo "n/a")
@@ -148,4 +160,5 @@ echo ""
 ok "Demo complete!"
 info "Dashboard:  http://localhost:3001"
 info "Incident:   http://localhost:3001/incident/${INCIDENT_ID}"
-info "Audit log:  ${COLLECTOR_URL}/incidents/${INCIDENT_ID}/audit"
+info "Audit log:  ${EXECUTOR_URL}/incidents/${INCIDENT_ID}/audit"
+info "            (the audit trail lives on the executor, not the collector)"

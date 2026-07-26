@@ -206,3 +206,73 @@ class TestArgoRollback:
 
         assert result["success"] is False
         assert "ARGOCD_TOKEN" in result["message"]
+
+
+class TestBlockingCallsAreOffloaded:
+    """
+    The kubernetes client is synchronous. Called straight from a coroutine it
+    holds the event loop for the whole round trip, which stalls everything else
+    the executor is serving — /healthz included. With a liveness probe at
+    periodSeconds 30 and failureThreshold 3, an unresponsive API server gets the
+    pod killed by the kubelet in the middle of a remediation.
+
+    These tests assert the blocking work happens off the loop, by checking that
+    the event loop stays responsive while an action is in flight.
+    """
+
+    async def test_event_loop_stays_responsive_during_a_slow_scale(
+        self, dispatcher, apps_api
+    ):
+        import asyncio
+        import time
+
+        def slow_patch(*a, **kw):
+            time.sleep(0.4)
+            return None
+
+        apps_api.patch_namespaced_deployment_scale.side_effect = slow_patch
+
+        action = asyncio.create_task(
+            dispatcher.execute(
+                action_type="scale_up",
+                namespace="orders",
+                deployment="order-service",
+                replicas=5,
+            )
+        )
+
+        # Stand in for /healthz: a trivial coroutine that must not be delayed.
+        t0 = time.perf_counter()
+        ticks = 0
+        while not action.done():
+            await asyncio.sleep(0.01)
+            ticks += 1
+        elapsed = time.perf_counter() - t0
+
+        await action
+        assert elapsed >= 0.4, "sanity: the action really did take time"
+        assert ticks > 5, (
+            f"the loop only got {ticks} chance(s) to run during a 0.4s call — the "
+            "blocking work is still on the event loop"
+        )
+
+    async def test_rollout_restart_is_also_offloaded(self, dispatcher, apps_api):
+        import asyncio
+        import time
+
+        apps_api.patch_namespaced_deployment.side_effect = lambda *a, **kw: time.sleep(0.3)
+
+        task = asyncio.create_task(
+            dispatcher.execute(
+                action_type="rollout_restart",
+                namespace="staging",
+                deployment="payments-api",
+            )
+        )
+        ticks = 0
+        while not task.done():
+            await asyncio.sleep(0.01)
+            ticks += 1
+        await task
+
+        assert ticks > 5, "rollout_restart is still blocking the event loop"

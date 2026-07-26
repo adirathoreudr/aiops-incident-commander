@@ -132,3 +132,28 @@ class TestGlobalFeed:
         redis.zsets[INCIDENT_INDEX_KEY] = ["inc-untouched"]
 
         assert await read_recent_audit(redis, limit=10) == []
+
+
+class TestGlobalFeedFairness:
+    async def test_a_busy_incident_does_not_hide_the_others(self, redis):
+        """
+        One noisy incident used to fill the whole page: the reader took the
+        newest `limit` incidents and then the newest `limit` entries, so an
+        incident with more than `limit` entries of its own crowded out every
+        other one. An "all events" view showing a single incident is worse than
+        a short one.
+        """
+        redis.zsets[INCIDENT_INDEX_KEY] = ["inc-noisy", "inc-quiet"]
+        redis.lists["audit:inc-noisy"] = [
+            json.dumps({"ts": f"2026-07-26T10:{i:02d}:00+00:00", "incident_id": "inc-noisy"})
+            for i in range(30)
+        ]
+        redis.lists["audit:inc-quiet"] = [
+            json.dumps({"ts": "2026-07-26T11:00:00+00:00", "incident_id": "inc-quiet"})
+        ]
+
+        entries = await read_recent_audit(redis, limit=10)
+        seen = {e["incident_id"] for e in entries}
+
+        assert "inc-quiet" in seen, "the quieter incident was crowded out entirely"
+        assert entries[0]["incident_id"] == "inc-quiet", "newest entry should lead"

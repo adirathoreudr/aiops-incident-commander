@@ -8,6 +8,7 @@ All methods return a consistent result dict.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -34,6 +35,15 @@ ARGOCD_SERVER = os.getenv(
 )
 ARGOCD_TOKEN = os.getenv("ARGOCD_TOKEN", "")
 IN_CLUSTER = os.getenv("IN_CLUSTER", "true").lower() == "true"
+
+# TLS verification for the ArgoCD API. This was hardcoded to verify=False, which
+# meant the bearer token below — a credential that can roll back any application
+# ArgoCD manages — was sent to whoever answered on that address, with no way to
+# tell an interception apart from the real server. ArgoCD commonly runs with a
+# self-signed certificate, so point ARGOCD_CA_BUNDLE at that CA instead of
+# turning verification off.
+ARGOCD_CA_BUNDLE = os.getenv("ARGOCD_CA_BUNDLE", "")
+ARGOCD_VERIFY: str | bool = ARGOCD_CA_BUNDLE or True
 
 _k8s_loaded = False
 
@@ -93,6 +103,11 @@ class ActionDispatcher:
         kubectl rollout restart deployment/<name> -n <namespace>
         Triggers a zero-downtime rolling restart by patching the pod template annotation.
         """
+        return await asyncio.to_thread(
+            self._rollout_restart_sync, namespace, deployment
+        )
+
+    def _rollout_restart_sync(self, namespace: str, deployment: str) -> dict:
         try:
             apps_v1 = k8s_client.AppsV1Api()
             import time
@@ -127,8 +142,11 @@ class ActionDispatcher:
             log.exception(msg)
             return {"success": False, "message": msg, "action": "rollout_restart"}
 
-    def _current_replicas(self, namespace: str, deployment: str) -> int | None:
+    async def _current_replicas(self, namespace: str, deployment: str) -> int | None:
         """Read the deployment's desired replica count, or None if unreadable."""
+        return await asyncio.to_thread(self._read_replicas_sync, namespace, deployment)
+
+    def _read_replicas_sync(self, namespace: str, deployment: str) -> int | None:
         try:
             dep = k8s_client.AppsV1Api().read_namespaced_deployment(
                 name=deployment, namespace=namespace
@@ -167,7 +185,7 @@ class ActionDispatcher:
                     "action": "scale",
                 }
 
-            current = self._current_replicas(namespace, deployment)
+            current = await self._current_replicas(namespace, deployment)
             if current is None:
                 return {
                     "success": False,
@@ -189,6 +207,11 @@ class ActionDispatcher:
                 replicas,
                 current,
             )
+        return await asyncio.to_thread(
+            self._scale_sync, namespace, deployment, replicas
+        )
+
+    def _scale_sync(self, namespace: str, deployment: str, replicas: int) -> dict:
         try:
             apps_v1 = k8s_client.AppsV1Api()
             patch = {"spec": {"replicas": replicas}}
@@ -230,7 +253,7 @@ class ActionDispatcher:
                 "Content-Type": "application/json",
             }
             # First, get app history to find last good revision
-            async with httpx.AsyncClient(timeout=30.0, verify=False) as http:
+            async with httpx.AsyncClient(timeout=30.0, verify=ARGOCD_VERIFY) as http:
                 await http.get(
                     f"{ARGOCD_SERVER}/api/v1/applications/{argocd_app}/resource-tree",
                     headers=headers,

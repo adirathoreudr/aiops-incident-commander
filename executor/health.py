@@ -17,6 +17,13 @@ log = logging.getLogger("executor.health")
 RECOVERY_TIMEOUT_S = int(os.getenv("RECOVERY_TIMEOUT_SECONDS", "120"))
 POLL_INTERVAL_S = float(os.getenv("RECOVERY_POLL_INTERVAL", "5.0"))
 
+# The kubernetes client is synchronous. Called directly from a coroutine it
+# blocks the event loop for the whole round trip, which stalls everything else
+# the process is serving — including /healthz. With a liveness probe at
+# periodSeconds 30 and failureThreshold 3, a Kubernetes API server that stops
+# answering gets the executor killed by the kubelet in the middle of a
+# remediation. Every such call therefore goes through asyncio.to_thread.
+
 
 class HealthChecker:
     """
@@ -40,7 +47,9 @@ class HealthChecker:
 
         while elapsed < timeout:
             try:
-                healthy = self._is_deployment_healthy(namespace, deployment)
+                healthy = await asyncio.to_thread(
+                    self._is_deployment_healthy, namespace, deployment
+                )
                 if healthy:
                     log.info(
                         "Recovery confirmed: %s/%s (elapsed=%.0fs)",

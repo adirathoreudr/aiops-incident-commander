@@ -2,6 +2,12 @@
 
 End-to-end demo from zero to resolved incident. Takes ~3 minutes once the stack is running.
 
+> **Authentication.** `/webhook/simulate` and the executor's `/approve` require
+> a bearer token. `docker compose up` supplies development defaults
+> (`dev-collector-token` / `dev-executor-token`) so this walkthrough works as
+> written; `scripts/simulate.sh` picks the collector one up automatically.
+> Outside compose, export `COLLECTOR_API_TOKEN` to match your collector.
+
 ## Prerequisites
 
 Stack running via `docker compose up -d` or deployed to EKS.
@@ -173,13 +179,22 @@ This is the **40% noise reduction** mechanism in action.
 
 ---
 
-## Key Numbers to Highlight for Recruiters
+## What This Demo Actually Shows
 
-| What | How demonstrated |
-|------|-----------------|
-| 50%+ MTTR reduction | Time from `simulate.sh` to `RESOLVED` vs manual triage baseline of ~30min |
-| 40% noise reduction | 5 identical alerts → 1 incident card |
-| 60% auto-resolved | `oom_kill` + `high_latency` auto-execute; `argocd_rollback` gates |
-| < 30s triage | `docker compose logs agent` timestamp delta |
-| Full auditability | AUDIT tab shows every step with timestamps |
-| Human control | `argocd_rollback` always requires approval regardless of confidence |
+Behaviour you can observe directly, with no claim attached that has not been
+measured. The percentage targets in the README are design goals, not results —
+this walkthrough demonstrates the mechanisms, not a benchmark.
+
+| What | How you see it |
+|------|----------------|
+| Alert correlation | 5 identical alerts → one incident card with `×5 grouped` |
+| Evidence-backed triage | Root cause cites the specific log lines and rollout events it rests on |
+| Triage latency | `docker compose logs agent` timestamp delta, alert → hypothesis |
+| Policy gating | `argocd_rollback` requires approval regardless of confidence |
+| Approval actually works | Clicking APPROVE moves the incident to execution, not to `escalated` |
+| Blocked namespaces hold | A `kube-system` target is refused even with approval |
+| Full auditability | AUDIT tab shows every decision, approval and action with timestamps |
+
+To turn the targets into measurements you would need a harness that replays a
+population of incidents through the live loop and records dedup ratio, triage
+latency and auto-resolve rate. That does not exist yet — it is on the roadmap.

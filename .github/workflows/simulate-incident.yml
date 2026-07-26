@@ -38,6 +38,10 @@ jobs:
           SCENARIO: ${{ inputs.scenario }}
           NAMESPACE: ${{ inputs.namespace }}
           COLLECTOR_URL: ${{ inputs.collector_url }}
+          # /webhook/simulate is authenticated: it enqueues an incident that can
+          # be auto-remediated. Store this as a repository secret matching the
+          # collector's COLLECTOR_API_TOKEN.
+          COLLECTOR_API_TOKEN: ${{ secrets.COLLECTOR_API_TOKEN }}
         run: |
           case "$SCENARIO" in
             crashloop)
@@ -104,11 +108,20 @@ jobs:
           HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
             -X POST "$COLLECTOR_URL" \
             -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $COLLECTOR_API_TOKEN" \
             -d "$PAYLOAD")
 
           echo "Response: $(cat /tmp/response.json)"
           echo "HTTP status: $HTTP_STATUS"
 
+          if [ "$HTTP_STATUS" = "401" ]; then
+            echo "::error::401 — the COLLECTOR_API_TOKEN secret does not match the collector's token"
+            exit 1
+          fi
+          if [ "$HTTP_STATUS" = "503" ]; then
+            echo "::error::503 — the collector has no COLLECTOR_API_TOKEN configured, so injection is refused"
+            exit 1
+          fi
           if [ "$HTTP_STATUS" != "200" ]; then
             echo "::error::Simulation failed with HTTP $HTTP_STATUS"
             exit 1

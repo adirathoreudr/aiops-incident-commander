@@ -19,3 +19,14 @@ receivers:
     webhook_configs:
       - url: http://collector:8000/webhook/alertmanager
         send_resolved: true
+        # Must match COLLECTOR_API_TOKEN on the collector. The collector only
+        # enforces a token on this endpoint once one is configured, but the local
+        # stack sets one, so Alertmanager has to send it or ingestion fails
+        # silently — the platform would look healthy and see nothing.
+        #
+        # Read from a file rather than inlined, so overriding COLLECTOR_API_TOKEN
+        # in the environment does not leave this side stale.
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/collector-token

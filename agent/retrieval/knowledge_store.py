@@ -41,14 +41,38 @@ class KnowledgeStore:
         self._runbook_index = None
         self._incident_index = None
 
-        if FAISS_AVAILABLE and USE_EMBEDDINGS and os.getenv("OPENAI_API_KEY"):
-            self._build_indexes()
-        else:
-            log.info(
-                "KnowledgeStore using keyword fallback (%d runbooks, %d incidents)",
-                len(self._runbooks),
-                len(self._incidents),
+        self._explain_and_build()
+
+    def _explain_and_build(self) -> None:
+        """
+        Choose vector or keyword retrieval, and say why.
+
+        The reason matters: semantic search needs an OpenAI embedding key even
+        when the reasoning model is Anthropic, so an Anthropic-only deployment
+        with USE_EMBEDDINGS=true used to fall back to keyword matching without a
+        word — the documentation promised FAISS and the logs showed nothing
+        amiss.
+        """
+        if not USE_EMBEDDINGS:
+            reason = "USE_EMBEDDINGS is false"
+        elif not FAISS_AVAILABLE:
+            reason = "faiss / langchain-community is not installed"
+        elif not os.getenv("OPENAI_API_KEY"):
+            reason = (
+                f"OPENAI_API_KEY is not set, and embeddings require it even when "
+                f"the reasoning model is not OpenAI (EMBED_MODEL={EMBED_MODEL})"
             )
+        else:
+            self._build_indexes()
+            return
+
+        log.warning(
+            "KnowledgeStore falling back to keyword search — %s "
+            "(%d runbooks, %d incidents loaded)",
+            reason,
+            len(self._runbooks),
+            len(self._incidents),
+        )
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
