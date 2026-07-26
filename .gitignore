@@ -48,3 +48,5 @@ kubeconfig
 # Logs
 *.log
 logs/
+*.tsbuildinfo
+ui/tsconfig.tsbuildinfo
