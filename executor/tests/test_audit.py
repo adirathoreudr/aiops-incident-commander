@@ -1,5 +1,5 @@
 """
-Tests for executor/audit.py — the executor's half of the audit trail.
+Tests for executor/audit.py - the executor's half of the audit trail.
 
 The executor owns the reads the dashboard uses, including the global feed on the
 audit page. That feed walks the collector's incident index rather than scanning
