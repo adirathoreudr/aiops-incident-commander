@@ -29,6 +29,15 @@ COLLECTOR_URL = os.getenv("COLLECTOR_URL", "http://aiops-collector:8000")
 EXECUTOR_URL = os.getenv("EXECUTOR_URL", "http://aiops-executor:8002")
 POLL_INTERVAL = float(os.getenv("QUEUE_POLL_INTERVAL", "2.0"))
 
+# Incident retention. The collector owns this value, but the agent and executor
+# re-persist the same key as they enrich and act on an incident, and SETEX
+# replaces the TTL on every write. With 3600 hardcoded here, setting
+# INCIDENT_TTL_SECONDS higher had no effect: the collector honoured it and the
+# next service to touch the incident silently reset it to an hour. Worse, a
+# triaged incident ended up with *shorter* retention than an untriaged one.
+INCIDENT_TTL_S = int(os.getenv("INCIDENT_TTL_SECONDS", "3600"))
+
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
@@ -135,7 +144,7 @@ async def queue_worker() -> None:
 
             # Persist enriched incident back to Redis
             await redis_client.setex(
-                f"incident:{incident_id}", 3600, json.dumps(result)
+                f"incident:{incident_id}", INCIDENT_TTL_S, json.dumps(result)
             )
 
             # Store audit record

@@ -92,7 +92,15 @@ async def read_recent_audit(redis: aioredis.Redis, limit: int = 50) -> list[dict
     O(N) and blocks the server, which is the wrong behaviour for a page an
     operator opens during an incident.
     """
-    incident_ids = await redis.zrevrange(INCIDENT_INDEX_KEY, 0, max(limit - 1, 0))
+    # Read from more incidents than the entry limit, because a single busy
+    # incident can easily produce more than `limit` entries on its own. Taking
+    # the newest `limit` incidents and then the newest `limit` entries would let
+    # one noisy incident fill the whole page and hide every other one — an
+    # "all events" view that silently shows a single incident is worse than a
+    # short one.
+    incident_ids = await redis.zrevrange(
+        INCIDENT_INDEX_KEY, 0, max(limit * 4 - 1, 0)
+    )
 
     entries: list[dict] = []
     for incident_id in incident_ids:

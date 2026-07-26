@@ -53,6 +53,11 @@ services:
       - --web.external-url=http://localhost:9093
     volumes:
       - ./infra/manifests/alertmanager-local.yml:/etc/alertmanager/alertmanager.yml:ro
+      # The token Alertmanager presents to the collector. Kept in a file so that
+      # overriding COLLECTOR_API_TOKEN changes both sides at once — a token
+      # hardcoded in the config would silently 401 the moment you overrode it,
+      # and a collector that receives no alerts looks identical to a quiet one.
+      - ./infra/manifests/collector-token:/etc/alertmanager/collector-token:ro
     ports:
       - "9093:9093"
     networks: [aiops]
@@ -182,3 +187,10 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+# infra/manifests/collector-token holds the credential Alertmanager presents to
+# the collector. It is committed with the development default. If you override
+# COLLECTOR_API_TOKEN, run scripts/write-dev-token.sh to update the file too —
+# otherwise Alertmanager keeps sending the old token, the collector returns 401,
+# and local alert ingestion fails in a way that looks exactly like a quiet
+# cluster from the dashboard.

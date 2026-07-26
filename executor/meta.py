@@ -6,6 +6,7 @@ rollout history and by the UI to list current deployments.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import logging
 
@@ -16,6 +17,11 @@ from kubernetes import config as k8s_config
 log = logging.getLogger("executor.meta")
 
 MetaRouter = APIRouter()
+
+# These handlers use the synchronous kubernetes client. Declared `async def` and
+# calling it directly, they block the event loop for the whole round trip — which
+# stalls every other request the executor is serving, /healthz included. Each
+# therefore does its blocking work in a helper offloaded via asyncio.to_thread.
 
 _loaded = False
 
@@ -40,6 +46,10 @@ async def rollout_history(namespace: str = "default", deployment: str = ""):
     Returns recent ReplicaSet history for a deployment,
     which represents rollout events.
     """
+    return await asyncio.to_thread(_rollout_history_sync, namespace, deployment)
+
+
+def _rollout_history_sync(namespace: str, deployment: str):
     _ensure_k8s()
     try:
         apps_v1 = k8s_client.AppsV1Api()
@@ -95,6 +105,10 @@ async def rollout_history(namespace: str = "default", deployment: str = ""):
 @MetaRouter.get("/deployments")
 async def list_deployments(namespace: str = "default"):
     """Returns list of deployments in namespace for UI dropdowns."""
+    return await asyncio.to_thread(_list_deployments_sync, namespace)
+
+
+def _list_deployments_sync(namespace: str):
     _ensure_k8s()
     try:
         apps_v1 = k8s_client.AppsV1Api()
@@ -123,6 +137,10 @@ async def list_deployments(namespace: str = "default"):
 @MetaRouter.get("/namespaces")
 async def list_namespaces():
     """Returns all non-system namespaces."""
+    return await asyncio.to_thread(_list_namespaces_sync)
+
+
+def _list_namespaces_sync():
     _ensure_k8s()
     try:
         core_v1 = k8s_client.CoreV1Api()

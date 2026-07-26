@@ -8,6 +8,7 @@ All methods return a consistent result dict.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -102,6 +103,11 @@ class ActionDispatcher:
         kubectl rollout restart deployment/<name> -n <namespace>
         Triggers a zero-downtime rolling restart by patching the pod template annotation.
         """
+        return await asyncio.to_thread(
+            self._rollout_restart_sync, namespace, deployment
+        )
+
+    def _rollout_restart_sync(self, namespace: str, deployment: str) -> dict:
         try:
             apps_v1 = k8s_client.AppsV1Api()
             import time
@@ -136,8 +142,11 @@ class ActionDispatcher:
             log.exception(msg)
             return {"success": False, "message": msg, "action": "rollout_restart"}
 
-    def _current_replicas(self, namespace: str, deployment: str) -> int | None:
+    async def _current_replicas(self, namespace: str, deployment: str) -> int | None:
         """Read the deployment's desired replica count, or None if unreadable."""
+        return await asyncio.to_thread(self._read_replicas_sync, namespace, deployment)
+
+    def _read_replicas_sync(self, namespace: str, deployment: str) -> int | None:
         try:
             dep = k8s_client.AppsV1Api().read_namespaced_deployment(
                 name=deployment, namespace=namespace
@@ -176,7 +185,7 @@ class ActionDispatcher:
                     "action": "scale",
                 }
 
-            current = self._current_replicas(namespace, deployment)
+            current = await self._current_replicas(namespace, deployment)
             if current is None:
                 return {
                     "success": False,
@@ -198,6 +207,11 @@ class ActionDispatcher:
                 replicas,
                 current,
             )
+        return await asyncio.to_thread(
+            self._scale_sync, namespace, deployment, replicas
+        )
+
+    def _scale_sync(self, namespace: str, deployment: str, replicas: int) -> dict:
         try:
             apps_v1 = k8s_client.AppsV1Api()
             patch = {"spec": {"replicas": replicas}}

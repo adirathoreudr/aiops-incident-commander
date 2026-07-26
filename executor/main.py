@@ -41,6 +41,15 @@ logging.basicConfig(
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 POLL_INTERVAL = float(os.getenv("QUEUE_POLL_INTERVAL", "2.0"))
 
+# Incident retention. The collector owns this value, but the agent and executor
+# re-persist the same key as they enrich and act on an incident, and SETEX
+# replaces the TTL on every write. With 3600 hardcoded here, setting
+# INCIDENT_TTL_SECONDS higher had no effect: the collector honoured it and the
+# next service to touch the incident silently reset it to an hour. Worse, a
+# triaged incident ended up with *shorter* retention than an untriaged one.
+INCIDENT_TTL_S = int(os.getenv("INCIDENT_TTL_SECONDS", "3600"))
+
+
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 actions_executed = Counter(
@@ -144,7 +153,7 @@ async def approve_action(req: ApprovalRequest):
         incident["approved_at"] = datetime.now(timezone.utc).isoformat()
         incident["status"] = "remediating"
         await redis_client.setex(
-            f"incident:{req.incident_id}", 3600, json.dumps(incident)
+            f"incident:{req.incident_id}", INCIDENT_TTL_S, json.dumps(incident)
         )
         await redis_client.lpush("executor:queue", req.incident_id)
         log.info(
@@ -157,7 +166,7 @@ async def approve_action(req: ApprovalRequest):
         incident["status"] = "escalated"
         incident["rejected_by"] = req.approver
         await redis_client.setex(
-            f"incident:{req.incident_id}", 3600, json.dumps(incident)
+            f"incident:{req.incident_id}", INCIDENT_TTL_S, json.dumps(incident)
         )
         log.info("Incident %s rejected by %s", req.incident_id, req.approver)
         return {"status": "rejected"}
@@ -277,7 +286,7 @@ async def executor_worker() -> None:
                 incident["status"] = "escalated"
                 incident["policy_block_reason"] = reason
                 await redis_client.setex(
-                    f"incident:{incident_id}", 3600, json.dumps(incident)
+                    f"incident:{incident_id}", INCIDENT_TTL_S, json.dumps(incident)
                 )
                 continue
 
@@ -289,7 +298,7 @@ async def executor_worker() -> None:
                 incident["requires_approval"] = True
                 incident["approval_reason"] = reason
                 await redis_client.setex(
-                    f"incident:{incident_id}", 3600, json.dumps(incident)
+                    f"incident:{incident_id}", INCIDENT_TTL_S, json.dumps(incident)
                 )
                 continue
 
@@ -329,7 +338,7 @@ async def executor_worker() -> None:
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
             await redis_client.setex(
-                f"incident:{incident_id}", 3600, json.dumps(incident)
+                f"incident:{incident_id}", INCIDENT_TTL_S, json.dumps(incident)
             )
 
             # Audit
