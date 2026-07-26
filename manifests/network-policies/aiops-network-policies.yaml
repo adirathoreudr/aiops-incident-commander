@@ -48,6 +48,16 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
+    # Ingress controller. Without this the Ingress resource points at a backend
+    # that default-deny-all refuses, which presents as a 503 from the ingress
+    # rather than anything that looks like a network policy problem.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
   egress:
     # Redis
     - to:
@@ -103,6 +113,17 @@ spec:
       ports:
         - protocol: TCP
           port: 8001
+    # Prometheus scrape from the monitoring namespace. Every Deployment here
+    # carries prometheus.io/scrape, but under default-deny-all that annotation
+    # is an intention, not access — without this rule the metrics endpoint is
+    # simply unreachable and the scrape silently fails.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8001
   egress:
     # Redis
     - to:
@@ -146,11 +167,30 @@ spec:
       ports:
         - protocol: TCP
           port: 8002
+    # Ingress controller — see the collector policy for why this is needed.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8002
     # Collector metadata calls
     - from:
         - podSelector:
             matchLabels:
               app: aiops-collector
+      ports:
+        - protocol: TCP
+          port: 8002
+    # Prometheus scrape from the monitoring namespace. Every Deployment here
+    # carries prometheus.io/scrape, but under default-deny-all that annotation
+    # is an intention, not access — without this rule the metrics endpoint is
+    # simply unreachable and the scrape silently fails.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
       ports:
         - protocol: TCP
           port: 8002

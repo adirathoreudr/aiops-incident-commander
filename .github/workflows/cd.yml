@@ -77,44 +77,59 @@ jobs:
         run: echo "IMAGE_TAG=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
       - name: Update kubeconfig
-        run: |
-          aws eks update-kubeconfig \
-            --name ${{ secrets.EKS_CLUSTER_NAME }} \
-            --region ${{ secrets.AWS_REGION }}
+        env:
+          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
 
-      - name: Apply RBAC + NetworkPolicies
-        run: |
-          kubectl apply -f manifests/rbac/namespace-and-rbac.yaml
-          kubectl apply -f manifests/network-policies/aiops-network-policies.yaml
+      # Pin the images and apply everything in one pass.
+      #
+      # This previously ran `kubectl set image` *before* `kubectl apply`, so the
+      # very first deploy tried to patch Deployments that did not exist yet and
+      # failed. It also rewrote the registry placeholder with sed, which cannot
+      # tell a successful substitution from a silent no-op.
+      #
+      # `kustomize edit set image` fails loudly on a name that does not match,
+      # and one `apply -k` creates or updates in dependency order — including
+      # the knowledge-base ConfigMaps, which are generated from knowledge-base/
+      # and previously did not exist at all, leaving the agent pod permanently
+      # in ContainerCreating.
+      - uses: imranismail/setup-kustomize@v2
 
-      - name: Apply Prometheus rules
-        run: |
-          kubectl apply -f manifests/monitoring/prometheus-rules.yaml
-          kubectl apply -f manifests/monitoring/alertmanager-config.yaml
-
-      - name: Update image tags in platform manifest
+      - name: Pin image references
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ steps.tag.outputs.IMAGE_TAG }}
         run: |
-          sed -i "s|REPLACE_WITH_ECR_URL|${ECR_REGISTRY}|g" manifests/aiops-platform.yaml
-          # Patch each deployment image individually
-          kubectl set image deployment/aiops-collector \
-            collector=${ECR_REGISTRY}/aiops-incident-commander/collector:${IMAGE_TAG} \
-            -n aiops
-          kubectl set image deployment/aiops-agent \
-            agent=${ECR_REGISTRY}/aiops-incident-commander/agent:${IMAGE_TAG} \
-            -n aiops
-          kubectl set image deployment/aiops-executor \
-            executor=${ECR_REGISTRY}/aiops-incident-commander/executor:${IMAGE_TAG} \
-            -n aiops
+          set -euo pipefail
+          for svc in collector agent executor; do
+            kustomize edit set image \
+              "REPLACE_WITH_ECR_URL/aiops-incident-commander/$svc=${ECR_REGISTRY}/aiops-incident-commander/$svc:${IMAGE_TAG}"
+          done
+          kustomize build . > /tmp/rendered.yaml
 
-      - name: Apply platform manifests (first deploy)
+          # Fail loudly if any placeholder survived. sed could not distinguish a
+          # successful substitution from a no-op, which is how a manifest that
+          # applies cleanly ends up pulling an image that does not exist.
+          if grep -q REPLACE_WITH_ECR_URL /tmp/rendered.yaml; then
+            echo "::error::image placeholder still present after substitution"
+            exit 1
+          fi
+
+      # The same gate CI runs, re-run against the manifests actually being
+      # applied. Catches a bad image substitution or a policy regression before
+      # it reaches the cluster rather than after.
+      - name: Re-validate rendered manifests
         run: |
-          kubectl apply -f manifests/aiops-platform.yaml
+          pip install pyyaml
+          python scripts/validate_manifests.py /tmp/rendered.yaml
+
+      - name: Apply
+        run: kubectl apply -f /tmp/rendered.yaml
 
       - name: Wait for rollouts
         run: |
+          kubectl rollout status statefulset/redis        -n aiops --timeout=300s
           kubectl rollout status deployment/aiops-collector -n aiops --timeout=300s
           kubectl rollout status deployment/aiops-agent     -n aiops --timeout=300s
           kubectl rollout status deployment/aiops-executor  -n aiops --timeout=300s
@@ -171,15 +186,3 @@ jobs:
           URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
           echo "DEPLOYMENT_URL=$URL" >> "$GITHUB_OUTPUT"
           echo "Deployed to: $URL"
-
-      - name: Comment deployment URL on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `🚀 UI deployed to Vercel: ${{ steps.vercel-deploy.outputs.DEPLOYMENT_URL }}`
-            })
