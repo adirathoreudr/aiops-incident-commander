@@ -21,7 +21,10 @@ metadata:
   name: aiops-collector
   namespace: aiops
   annotations:
-    description: "AIOps alert collector — read-only observability access"
+    description: >-
+      AIOps alert collector. Intentionally has no RBAC bindings: it never calls
+      the Kubernetes API, reaching rollout history through the executor's /meta
+      endpoints instead.
 
 ---
 apiVersion: v1
@@ -43,39 +46,15 @@ metadata:
     description: "AIOps executor — scoped write for restart/scale only"
 
 ---
-# ── ClusterRole: read K8s events + pods (collector) ──────────────────────
-
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: aiops-collector-reader
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "pods/log", "nodes", "namespaces", "events", "services"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["metrics.k8s.io"]
-    resources: ["pods", "nodes"]
-    verbs: ["get", "list"]
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: aiops-collector-reader
-subjects:
-  - kind: ServiceAccount
-    name: aiops-collector
-    namespace: aiops
-roleRef:
-  kind: ClusterRole
-  name: aiops-collector-reader
-  apiGroup: rbac.authorization.k8s.io
-
----
-# ── ClusterRole: rollout history reader (executor meta) ───────────────────
+# ── ClusterRole: cluster-wide read for discovery (executor /meta) ─────────
+#
+# The collector has no ServiceAccount-bound role at all: it never calls the
+# Kubernetes API. It reads rollout history through the executor's /meta
+# endpoints, so a cluster-wide reader role bound to it granted standing access
+# to every pod and log in the cluster that nothing used.
+#
+# Reads stay cluster-wide because /meta/namespaces and /meta/deployments exist
+# to discover what is out there. Writes do not — see below.
 
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -86,14 +65,14 @@ rules:
     resources: ["pods", "pods/log", "nodes", "namespaces", "events"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "deployments/scale", "replicasets", "statefulsets"]
-    verbs: ["get", "list", "watch", "patch", "update"]
+    resources: ["deployments", "deployments/scale", "replicasets"]
+    verbs: ["get", "list", "watch"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: aiops-executor-writer
+  name: aiops-executor-reader
 subjects:
   - kind: ServiceAccount
     name: aiops-executor
@@ -101,6 +80,48 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: aiops-executor-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ── Role: remediation writes, one namespace at a time ────────────────────
+#
+# This was a ClusterRole bound cluster-wide, which gave the executor patch and
+# update on deployments in *every* namespace, kube-system included. The only
+# thing standing between a bug in the policy engine and a rewrite of a system
+# component was application code. Now the namespace allowlist in
+# executor/policy.py is mirrored at the authorisation layer: the executor
+# physically cannot write to a namespace nobody granted it.
+#
+# `patch` alone is enough — the dispatcher issues strategic-merge patches for
+# both the restart annotation and the replica count — so `update`, which permits
+# replacing the whole object, is not granted. `statefulsets` is dropped for the
+# same reason: no action touches them.
+#
+# To let the platform remediate another namespace, copy the RoleBinding below
+# into it. That is deliberately an explicit, auditable act.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-executor-remediator
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aiops-executor-remediator
+  namespace: staging
+subjects:
+  - kind: ServiceAccount
+    name: aiops-executor
+    namespace: aiops
+roleRef:
+  kind: ClusterRole
+  name: aiops-executor-remediator
   apiGroup: rbac.authorization.k8s.io
 
 ---

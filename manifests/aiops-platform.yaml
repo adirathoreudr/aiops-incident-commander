@@ -102,6 +102,12 @@ spec:
               value: "http://loki.monitoring.svc.cluster.local:3100"
             - name: K8S_API_URL
               value: "http://aiops-executor:8002"
+            - name: COLLECTOR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aiops-secrets
+                  key: collector-api-token
+                  optional: true
           resources:
             requests: { cpu: "200m", memory: "256Mi" }
             limits:   { cpu: "500m", memory: "512Mi" }
@@ -261,6 +267,11 @@ spec:
                   optional: true
             - name: IN_CLUSTER
               value: "true"
+            - name: EXECUTOR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aiops-secrets
+                  key: executor-api-token
           resources:
             requests: { cpu: "200m", memory: "256Mi" }
             limits:   { cpu: "500m", memory: "512Mi" }
@@ -305,6 +316,9 @@ data:
   MIN_CONFIDENCE_HIGH_RISK: "0.90"
   BLOCKED_NAMESPACES: "kube-system,kube-public,cert-manager"
   HIGH_RISK_NAMESPACES: "production,prod"
+  # Browser origins permitted to call the services. Was "*" on all three.
+  # Set this to the dashboard's real origin before exposing anything.
+  CORS_ALLOWED_ORIGINS: "http://localhost:3001"
 
 ---
 # ── Secret template (populate via external-secrets or sealed-secrets) ────────
@@ -321,7 +335,11 @@ type: Opaque
 # kubectl create secret generic aiops-secrets \
 #   --from-literal=openai-api-key=$OPENAI_API_KEY \
 #   --from-literal=argocd-token=$ARGOCD_TOKEN \
+#   --from-literal=executor-api-token=$(openssl rand -hex 32) \
+#   --from-literal=collector-api-token=$(openssl rand -hex 32) \
 #   -n aiops
 stringData:
   openai-api-key: "REPLACE_ME"
   argocd-token: "REPLACE_ME"
+  executor-api-token: "REPLACE_ME"
+  collector-api-token: "REPLACE_ME"

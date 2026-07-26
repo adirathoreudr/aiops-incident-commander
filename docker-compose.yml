@@ -4,8 +4,6 @@
 #           collector, agent, executor
 # Usage: docker compose up -d
 
-version: "3.9"
-
 networks:
   aiops:
     driver: bridge
@@ -96,6 +94,10 @@ services:
       K8S_API_URL: http://executor:8002
       AGENT_URL: http://agent:8001
       DEDUP_WINDOW_SECONDS: "120"
+      # Local development token. Generate a real one per environment:
+      #   openssl rand -hex 32
+      COLLECTOR_API_TOKEN: "${COLLECTOR_API_TOKEN:-dev-collector-token}"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3001,http://127.0.0.1:3001"
     ports:
       - "8000:8000"
     networks: [aiops]
@@ -118,6 +120,7 @@ services:
       LLM_TEMPERATURE: "0.1"
       AUTO_EXECUTE_THRESHOLD: "0.75"
       USE_EMBEDDINGS: "true"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3001,http://127.0.0.1:3001"
       RUNBOOKS_PATH: /app/knowledge-base/runbooks
       INCIDENTS_PATH: /app/knowledge-base/incidents
     volumes:
@@ -131,9 +134,9 @@ services:
     restart: unless-stopped
 
   # ── UI ─────────────────────────────────────────────────────────────────────
-  # The dashboard proxies to the collector and executor through Next rewrites,
-  # so the browser only ever talks to this origin and the service URLs stay
-  # server-side.
+  # The dashboard proxies to the collector and executor through its own API
+  # routes, so the browser only ever talks to this origin and neither the
+  # service URLs nor the API tokens are exposed to the client.
   ui:
     image: node:20-alpine
     working_dir: /app
@@ -141,6 +144,10 @@ services:
     environment:
       COLLECTOR_URL: http://collector:8000
       EXECUTOR_URL: http://executor:8002
+      # Server-side only (no NEXT_PUBLIC_ prefix), so Next will not inline these
+      # into the client bundle. The API routes under pages/api attach them.
+      EXECUTOR_API_TOKEN: "${EXECUTOR_API_TOKEN:-dev-executor-token}"
+      COLLECTOR_API_TOKEN: "${COLLECTOR_API_TOKEN:-dev-collector-token}"
     volumes:
       - ./ui:/app
       - /app/node_modules
@@ -162,6 +169,9 @@ services:
       BLOCKED_NAMESPACES: "kube-system,kube-public,cert-manager"
       HIGH_RISK_NAMESPACES: "production,prod"
       MIN_CONFIDENCE_AUTO: "0.75"
+      # Without this the mutating endpoints refuse every request by design.
+      EXECUTOR_API_TOKEN: "${EXECUTOR_API_TOKEN:-dev-executor-token}"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3001,http://127.0.0.1:3001"
     volumes:
       # Mount kubeconfig for local dev
       - "${HOME}/.kube:/home/appuser/.kube:ro"

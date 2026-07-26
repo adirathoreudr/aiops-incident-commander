@@ -25,16 +25,24 @@ jobs:
       has-aws: ${{ steps.check.outputs.has-aws }}
       has-vercel: ${{ steps.check.outputs.has-vercel }}
     steps:
+      # Secrets are passed through env rather than interpolated into the script
+      # body. `${{ secrets.X }}` is substituted before the shell ever sees the
+      # line, so the secret becomes part of the command text — where a value
+      # containing a quote or a semicolon changes what runs, and anything that
+      # echoes the command (set -x, a trace, a crash dump) prints the secret.
       - id: check
         shell: bash
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
-          if [ "${{ secrets.AWS_DEPLOY_ROLE_ARN }}" != "" ]; then
+          if [ -n "$AWS_DEPLOY_ROLE_ARN" ]; then
             echo "has-aws=true" >> "$GITHUB_OUTPUT"
           else
             echo "has-aws=false" >> "$GITHUB_OUTPUT"
           fi
-          
-          if [ "${{ secrets.VERCEL_TOKEN }}" != "" ]; then
+
+          if [ -n "$VERCEL_TOKEN" ]; then
             echo "has-vercel=true" >> "$GITHUB_OUTPUT"
           else
             echo "has-vercel=false" >> "$GITHUB_OUTPUT"

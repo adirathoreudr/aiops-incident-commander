@@ -18,7 +18,7 @@ import json
 import logging
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, generate_latest
 from pydantic import BaseModel
@@ -27,6 +27,8 @@ from starlette.responses import Response
 
 from .actions import ActionDispatcher
 from .audit import AuditLogger, read_audit, read_recent_audit
+from .auth import log_auth_status, require_token, require_token_if_configured
+from .cors import allowed_origins
 from .health import HealthChecker
 from .meta import MetaRouter
 from .policy import Decision, PolicyEngine
@@ -60,6 +62,7 @@ async def lifespan(app: FastAPI):
     global redis_client, worker_task
     redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
     worker_task = asyncio.create_task(executor_worker())
+    log_auth_status()
     log.info("Executor started")
     yield
     worker_task.cancel()
@@ -73,7 +76,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=allowed_origins(),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 app.include_router(MetaRouter, prefix="/meta", tags=["metadata"])
 
@@ -109,11 +115,14 @@ async def metrics():
     return Response(generate_latest(), media_type="text/plain")
 
 
-@app.post("/approve")
+@app.post("/approve", dependencies=[Depends(require_token)])
 async def approve_action(req: ApprovalRequest):
     """
     Human approval endpoint. Operator approves or rejects a pending action.
     If approved, incident is pushed to executor queue.
+
+    Authenticated: approving an action is what lets the executor patch a
+    deployment, so this is one of the two doors into the cluster.
     """
     raw = await redis_client.get(f"incident:{req.incident_id}")
     if not raw:
@@ -154,9 +163,15 @@ async def approve_action(req: ApprovalRequest):
         return {"status": "rejected"}
 
 
-@app.post("/execute/manual")
+@app.post("/execute/manual", dependencies=[Depends(require_token)])
 async def manual_execute(req: ManualActionRequest):
-    """Direct execution endpoint for operator-initiated actions."""
+    """
+    Direct execution endpoint for operator-initiated actions.
+
+    Authenticated: this is the most direct path to a cluster change in the whole
+    platform — it skips the agent entirely and asks for a specific action
+    against a specific deployment.
+    """
     policy = PolicyEngine()
     dispatcher = ActionDispatcher()
 
@@ -199,12 +214,15 @@ async def manual_execute(req: ManualActionRequest):
     return result
 
 
-@app.get("/incidents/{incident_id}/audit")
+@app.get(
+    "/incidents/{incident_id}/audit",
+    dependencies=[Depends(require_token_if_configured)],
+)
 async def get_audit(incident_id: str):
     return {"entries": await read_audit(redis_client, incident_id)}
 
 
-@app.get("/audit")
+@app.get("/audit", dependencies=[Depends(require_token_if_configured)])
 async def get_recent_audit(limit: int = 50):
     """Audit entries across all incidents, newest first — the global feed."""
     return {"entries": await read_recent_audit(redis_client, limit)}

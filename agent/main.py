@@ -19,6 +19,7 @@ import redis.asyncio as aioredis
 from starlette.responses import Response
 
 from .audit import AuditLogger, read_audit
+from .cors import allowed_origins
 from .reasoner import AUTO_EXECUTE_THRESHOLD, IncidentReasoner
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -67,7 +68,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=allowed_origins(),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 

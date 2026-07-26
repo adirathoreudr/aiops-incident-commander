@@ -12,13 +12,15 @@ import json
 import logging
 import os
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import Counter, Histogram, generate_latest
 import redis.asyncio as aioredis
 from starlette.responses import Response
 
+from .auth import log_auth_status, require_token, require_token_if_configured
+from .cors import allowed_origins
 from .normalizer import (
     fetch_k8s_rollout_history,
     fetch_loki_logs,
@@ -58,6 +60,7 @@ redis_client: aioredis.Redis | None = None
 async def lifespan(app: FastAPI):
     global redis_client
     redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+    log_auth_status()
     log.info("Collector started — Redis %s", REDIS_URL)
     yield
     if redis_client:
@@ -72,7 +75,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=allowed_origins(),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -99,9 +105,19 @@ async def metrics():
     return Response(generate_latest(), media_type="text/plain")
 
 
-@app.post("/webhook/alertmanager")
+@app.post(
+    "/webhook/alertmanager",
+    dependencies=[Depends(require_token_if_configured)],
+)
 async def alertmanager_webhook(request: Request, background: BackgroundTasks):
-    """Alertmanager webhook — returns 200 immediately, processes async."""
+    """
+    Alertmanager webhook — returns 200 immediately, processes async.
+
+    Authenticated only once COLLECTOR_API_TOKEN is set: requiring it
+    unconditionally would stop real alert ingestion on any deployment whose
+    Alertmanager has not been reconfigured, and a platform that silently sees
+    no alerts is worse than one with an open ingest path.
+    """
     try:
         body = await request.json()
     except Exception:
@@ -110,9 +126,16 @@ async def alertmanager_webhook(request: Request, background: BackgroundTasks):
     return {"status": "accepted"}
 
 
-@app.post("/webhook/simulate")
+@app.post("/webhook/simulate", dependencies=[Depends(require_token)])
 async def simulate_incident(payload: dict):
-    """Inject a synthetic incident for demo/testing."""
+    """
+    Inject a synthetic incident for demo/testing.
+
+    Authenticated and failing closed. This looks like a test fixture but it
+    puts an incident straight onto the agent queue, and a confident incident in
+    a permitted namespace is auto-executed with no human in the loop — so it is
+    a remote cluster-mutation path in everything but name.
+    """
     incident = IncidentContext(
         title=payload.get("title", "Simulated Incident"),
         severity=Severity(payload.get("severity", "high")),
@@ -134,7 +157,7 @@ async def simulate_incident(payload: dict):
     return {"incident_id": incident.incident_id, "status": "enqueued"}
 
 
-@app.get("/incidents")
+@app.get("/incidents", dependencies=[Depends(require_token_if_configured)])
 async def list_incidents(limit: int = 20):
     """
     Most recent incidents first.
@@ -166,7 +189,10 @@ async def list_incidents(limit: int = 20):
     return {"incidents": incidents, "count": len(incidents)}
 
 
-@app.get("/incidents/{incident_id}")
+@app.get(
+    "/incidents/{incident_id}",
+    dependencies=[Depends(require_token_if_configured)],
+)
 async def get_incident(incident_id: str):
     raw = await redis_client.get(f"incident:{incident_id}")
     if not raw:

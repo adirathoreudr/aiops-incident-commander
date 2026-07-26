@@ -35,6 +35,15 @@ ARGOCD_SERVER = os.getenv(
 ARGOCD_TOKEN = os.getenv("ARGOCD_TOKEN", "")
 IN_CLUSTER = os.getenv("IN_CLUSTER", "true").lower() == "true"
 
+# TLS verification for the ArgoCD API. This was hardcoded to verify=False, which
+# meant the bearer token below — a credential that can roll back any application
+# ArgoCD manages — was sent to whoever answered on that address, with no way to
+# tell an interception apart from the real server. ArgoCD commonly runs with a
+# self-signed certificate, so point ARGOCD_CA_BUNDLE at that CA instead of
+# turning verification off.
+ARGOCD_CA_BUNDLE = os.getenv("ARGOCD_CA_BUNDLE", "")
+ARGOCD_VERIFY: str | bool = ARGOCD_CA_BUNDLE or True
+
 _k8s_loaded = False
 
 
@@ -230,7 +239,7 @@ class ActionDispatcher:
                 "Content-Type": "application/json",
             }
             # First, get app history to find last good revision
-            async with httpx.AsyncClient(timeout=30.0, verify=False) as http:
+            async with httpx.AsyncClient(timeout=30.0, verify=ARGOCD_VERIFY) as http:
                 await http.get(
                     f"{ARGOCD_SERVER}/api/v1/applications/{argocd_app}/resource-tree",
                     headers=headers,
