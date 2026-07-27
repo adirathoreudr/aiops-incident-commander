@@ -82,6 +82,23 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
 
+      # Installed from the upstream release rather than a third-party action.
+      # Two reasons: setup-kustomize publishes v2.0.0 and v2.1.0 but no floating
+      # `v2`, so the previous ref could not resolve and this job would have died
+      # at "Set up job" on its first real run; and this job assumes an AWS role
+      # and applies to a live cluster, so every third-party action in it is
+      # supply-chain surface worth removing.
+      - name: Install kustomize
+        env:
+          KUSTOMIZE_VERSION: "5.4.3"
+        run: |
+          set -euo pipefail
+          curl -sSLf \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+            | tar xz
+          sudo mv kustomize /usr/local/bin/
+          kustomize version
+
       # Pin the images and apply everything in one pass.
       #
       # This previously ran `kubectl set image` *before* `kubectl apply`, so the
@@ -90,12 +107,10 @@ jobs:
       # tell a successful substitution from a silent no-op.
       #
       # `kustomize edit set image` fails loudly on a name that does not match,
-      # and one `apply -k` creates or updates in dependency order — including
-      # the knowledge-base ConfigMaps, which are generated from knowledge-base/
-      # and previously did not exist at all, leaving the agent pod permanently
-      # in ContainerCreating.
-      - uses: imranismail/setup-kustomize@v2
-
+      # and one apply creates or updates in dependency order — including the
+      # knowledge-base ConfigMaps, which are generated from knowledge-base/ and
+      # previously did not exist at all, leaving the agent pod permanently in
+      # ContainerCreating.
       - name: Pin image references
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
