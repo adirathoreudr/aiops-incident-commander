@@ -286,15 +286,22 @@ incident on a real cluster. Point it at a staging namespace first.
 
 ---
 
-## Roadmap
+## Known limitations
 
-- Prometheus metric ingestion — the schema has `MetricSample`; nothing populates
-  it, and the prompt tells the model not to cite metrics for that reason
-- A benchmark harness, so the targets above can become measurements
-- SSO/OIDC on the approval flow (currently a shared bearer token)
-- Shared package for the duplicated `audit.py` / `cors.py` — each service builds
-  from its own Docker context and cannot import from the others
-- Slack / PagerDuty notifications, multi-cluster fleet view, postmortem export
+- **No metric ingestion.** `IncidentContext.metrics` and `MetricSample` exist in
+  the schema but nothing populates them, and `PROMETHEUS_URL` is unread. The
+  prompt explicitly tells the model not to cite metric values for this reason —
+  numbers it has not been shown would be invented.
+- **The design targets are unmeasured.** No benchmark harness exists.
+- **Approval auth is a shared bearer token**, not per-operator identity. The
+  audit trail records whatever `approver` string the caller supplies, so it
+  attributes an approval without authenticating who made it.
+- **`audit.py` and `cors.py` are duplicated** across services. Each builds from
+  its own Docker context and cannot import from the others; the storage contract
+  is documented in both files instead.
+- **One incident at a time.** The executor waits for recovery before taking the
+  next, so a slow rollback delays the queue. Serialising cluster mutations is the
+  safer default, but it is a throughput ceiling during a storm.
 
 See [`docs/DEMO.md`](docs/DEMO.md) for a scripted walkthrough and
 [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) for
