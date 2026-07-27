@@ -203,8 +203,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Pinned to a full version tag. aquasecurity does not publish a floating
+      # major tag, so a bare `0.24.0` / `@v0` style ref does not resolve and the
+      # job dies at "Set up job" before any step runs.
       - name: Trivy scan (HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: ${{ matrix.service }}:${{ steps.tag.outputs.IMAGE_TAG }}
           format: sarif
