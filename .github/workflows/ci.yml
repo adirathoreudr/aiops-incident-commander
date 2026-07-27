@@ -203,21 +203,42 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Pinned to a full version tag. aquasecurity does not publish a floating
-      # major tag, so a bare `0.24.0` / `@v0` style ref does not resolve and the
-      # job dies at "Set up job" before any step runs.
+      # Trivy runs from its own published image rather than via
+      # aquasecurity/trivy-action. The action was tried twice and failed twice:
+      # the tag `0.24.0` did not exist at all, and v0.33.1 resolved but its
+      # internal install.sh exited 1 while fetching the trivy binary, leaving no
+      # SARIF behind. Running the image directly removes both the tag-resolution
+      # and the bootstrap-script failure modes, and pins the scanner version
+      # explicitly. The socket mount is what lets trivy see the image that the
+      # previous step loaded into the local daemon.
+      #
+      # --exit-code 0 keeps findings informational: they are surfaced in the
+      # Security tab rather than breaking the build. A scanner that fails to run
+      # is a different matter and does fail the job — a green build should not
+      # mean "the scan silently didn't happen".
       - name: Trivy scan (HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: ${{ matrix.service }}:${{ steps.tag.outputs.IMAGE_TAG }}
-          format: sarif
-          output: trivy-${{ matrix.service }}.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+        env:
+          IMAGE: ${{ matrix.service }}:${{ steps.tag.outputs.IMAGE_TAG }}
+          SARIF: trivy-${{ matrix.service }}.sarif
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/work" -w /work \
+            aquasec/trivy:0.65.0 image \
+              --format sarif \
+              --output "$SARIF" \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 0 \
+              "$IMAGE"
+          test -s "$SARIF"
 
+      # Not `if: always()`. If the scan step failed there is no SARIF to upload,
+      # and attempting it only adds a second, misleading "Path does not exist"
+      # error on top of the real one.
       - name: Upload scan results
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
           category: trivy-${{ matrix.service }}
