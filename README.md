@@ -1,828 +1,307 @@
 # Autonomous Incident Commander (AIOps) for Kubernetes
 
-<div align="center">
-
-```
-  ╔═══════════════════════════════════════════════════════════╗
-  ║          AUTONOMOUS INCIDENT COMMANDER — AIOps            ║
-  ║   AI-powered detection · root-cause · safe remediation    ║
-  ╚═══════════════════════════════════════════════════════════╝
-```
-
 [![CI](https://github.com/adirathoreudr/aiops-incident-commander/actions/workflows/ci.yml/badge.svg)](https://github.com/adirathoreudr/aiops-incident-commander/actions/workflows/ci.yml)
-[![CD](https://github.com/adirathoreudr/aiops-incident-commander/actions/workflows/cd.yml/badge.svg)](https://github.com/adirathoreudr/aiops-incident-commander/actions/workflows/cd.yml)
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-f59e0b?logo=python&logoColor=white)](https://python.org)
 [![Next.js 14](https://img.shields.io/badge/Next.js-14-white?logo=next.js&logoColor=black)](https://nextjs.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-EKS-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
 
-**[Quick start](#-quick-setup-tldr)** · **[Docs](docs/)** · **[Architecture](#architecture)**
+An AI agent that triages Kubernetes incidents and remediates the safe ones,
+without giving anything shell access.
 
-</div>
+Alertmanager alerts are correlated into incidents, enriched with Loki logs and
+rollout history, reasoned over by an LLM that must cite its evidence, and — if a
+policy engine agrees — remediated through a fixed allowlist of reversible
+actions. Every decision, approval and action is recorded.
 
----
-
-## What Is This?
-
-Ops teams waste hours triaging noisy alerts, manually correlating logs with metrics, and executing repetitive remediation steps under pressure. Critical incidents escalate because root-cause analysis depends on senior engineers who aren't always available.
-
-**Autonomous Incident Commander** is an end-to-end AIOps platform that:
-
-- **Ingests** alerts from Prometheus Alertmanager and logs from Loki
-- **Normalises** raw telemetry into a single structured incident object
-- **Reasons** over the incident with a LangChain agent backed by OpenAI GPT-4o-mini
-- **Retrieves** similar past incidents and runbooks from a FAISS vector store
-- **Produces** a root-cause hypothesis with confidence scoring and evidence citations
-- **Executes** safe remediation actions (restart, scale, rollback) through the Kubernetes API and ArgoCD
-- **Gates** every action through a policy engine — high-risk actions require human approval
-- **Logs** every prompt, decision, approval, and execution in an append-only audit trail
-- **Displays** incident state, AI analysis, and action history in a polished operator dashboard
+**Nothing here is autonomous by default.** High-risk actions require a human,
+production namespaces demand higher confidence, `kube-system` is off limits
+entirely, and the model can only ever escalate to review, never away from it.
 
 ---
 
-## ⚡ Quick Setup TL;DR
-
-**What does it do?**  
-Imagine having a junior DevOps engineer who never sleeps. This AI agent monitors your servers 24/7. When something breaks (like a website crash or a slow database), it doesn't just send you a "help" message—it reads the logs, finds the exact line of code that failed, and suggests a fix (like restarting the server or rolling back an update).
-
-**How it helps you:**  
-- **No more 3 AM wake-up calls:** The agent can fix common issues automatically while you sleep.
-- **Instant Answers:** Instead of digging through thousands of lines of logs, the AI gives you a 2-sentence summary of what happened.
-- **Safety First:** It always asks for your "thumbs up" before making any big changes, so you're always in control.
-
-### 🚀 Get started in under 2 minutes:
-
-1.  **Clone & API Key:**
-    ```bash
-    git clone https://github.com/adirathoreudr/aiops-incident-commander.git
-    cd aiops-incident-commander
-
-    # Use OpenAI:
-    echo "OPENAI_API_KEY=your_openai_key" > .env
-
-    # OR Use Anthropic (Claude):
-    # echo "ANTHROPIC_API_KEY=your_claude_key" > .env
-    # echo "LLM_MODEL=claude-3-5-sonnet-20240620" >> .env
-    ```
-2.  **Launch Stack:**
-    ```bash
-    docker compose up -d
-    ```
-    Compose supplies development API tokens automatically. For anything beyond
-    your laptop, generate real ones — see [Authentication](#authentication).
-3.  **Access Dashboard:**
-    Open **[http://localhost:3001](http://localhost:3001)**. The UI is part of
-    the compose stack, so there is nothing separate to start.
-
-*The dashboard reads from the collector, so it shows whatever incidents your
-stack is actually holding. There is no demo dataset — an empty feed means no
-incidents, and the header says DISCONNECTED if the collector is unreachable.*
-
----
-
-## Results (Simulated Incidents)
-
-| Metric | Design target |
-|--------|---------------|
-| MTTR reduction | ≥ 50% |
-| Alert noise cut | ≥ 40% via dedup + grouping |
-| Auto-resolved without shell access | ≥ 60% |
-| Triage latency (alert → hypothesis) | < 30s |
-
-These are the targets the design aims at, **not measurements**. No benchmark
-harness exists in this repository, so nothing here has been measured — an
-earlier version of this table carried an "Achieved" column whose figures were
-hardcoded literals in the dashboard. If you need real numbers, build a harness
-that replays incidents through the live loop and quote its output.
-
-What *is* verified is in [Running Tests](#running-tests) and the CI pipeline:
-the loop has been exercised end to end against real services (Alertmanager
-webhook → dedup → approval → execution → audit trail), and the Kubernetes
-manifests are schema- and policy-validated on every push.
-
----
-
-## Architecture
-
-![Architecture Diagram](./docs/architecture-diagram.png)
-
----
-
-## Repository Structure
-
-```
-aiops-incident-commander/
-├── agent/                    # LangChain reasoning agent (Python)
-│   ├── main.py               # FastAPI + async queue worker
-│   ├── reasoner.py           # LangChain + LLM reasoning loop
-│   ├── audit.py              # Append-only audit logger
-│   ├── prompts/
-│   │   └── incident_prompt.py   # Evidence-backed system + human prompts
-│   ├── retrieval/
-│   │   └── knowledge_store.py   # FAISS vector store + keyword fallback
-│   ├── tests/
-│   │   └── test_agent.py
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── collector/                # Alert ingestion service (Python)
-│   ├── main.py               # FastAPI + Alertmanager webhook
-│   ├── schema.py             # IncidentContext Pydantic model
-│   ├── normalizer.py         # Alertmanager → canonical schema, Loki pull
-│   ├── tests/
-│   │   └── test_normalizer.py
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── executor/                 # Remediation executor (Python)
-│   ├── main.py               # FastAPI + approval endpoint + worker
-│   ├── policy.py             # PolicyEngine — allowlist + thresholds
-│   ├── actions.py            # K8s Python client + ArgoCD REST
-│   ├── health.py             # Post-action recovery polling
-│   ├── meta.py               # Read-only K8s metadata API
-│   ├── tests/
-│   │   └── test_policy.py
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── knowledge-base/           # Runbooks + incident memory
-│   ├── runbooks/             # 5 production runbooks (JSON)
-│   └── incidents/            # Historical incident examples (JSON)
-│
-├── infra/
-│   ├── terraform/            # EKS + VPC + ECR + S3 + IAM
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   └── manifests/            # Local dev configs (Prometheus, Loki, etc.)
-│
-├── manifests/                # Kubernetes manifests
-│   ├── aiops-platform.yaml   # All Deployments + Services + ConfigMap
-│   ├── rbac/                 # Namespace, ServiceAccounts, ClusterRoles
-│   ├── network-policies/     # Zero-trust NetworkPolicies
-│   ├── monitoring/           # PrometheusRules + AlertmanagerConfig CR
-│   └── secret.example.yaml   # Key names only — never applied
-│
-├── ui/                       # Operator dashboard (Next.js 14)
-│   ├── src/
-│   │   ├── pages/            # index, dashboard, incident/[id], audit
-│   │   ├── components/       # Layout, IncidentCard, StatCard, AuditTimeline
-│   │   ├── lib/              # types, api hooks (no demo data — reads the collector)
-│   │   └── pages/api/        # Server-side proxies that attach the API tokens
-│   ├── vercel.json
-│   └── package.json
-│
-├── docs/                     # Architecture diagrams + screenshots
-├── .github/
-│   └── workflows/
-│       ├── ci.yml            # lint → test → build → trivy scan
-│       ├── cd.yml            # deploy EKS + Vercel on main
-│       └── simulate-incident.yml  # Manual incident injection
-├── docker-compose.yml        # Full local dev stack
-├── .env.example
-└── README.md
-```
-
----
-
-## Technology Stack
-
-| Layer | Technology | Role |
-|-------|-----------|------|
-| Cloud | AWS EKS, EC2, IAM, ECR, S3 | Host cluster, store state, secure platform |
-| IaC | Terraform 1.5+ | Reproducible infra: VPC, EKS, ECR, IAM IRSA |
-| Containers | Docker (multi-stage) | Minimal non-root images, Trivy-scanned |
-| Orchestration | Kubernetes 1.29 | Workload runtime + remediation target |
-| GitOps | ArgoCD | Desired-state reconciliation + rollback |
-| CI/CD | GitHub Actions | lint → test → build → ECR push → EKS deploy |
-| Observability | Prometheus + Loki + Grafana | Metrics, logs, dashboards |
-| Alerting | Alertmanager | Routes `critical\|high` alerts to collector |
-| AI Agent | Python + LangChain + OpenAI | Structured reasoning over incident context |
-| Vector Store | FAISS (cpu) | Runbook + incident memory retrieval |
-| Queue / State | Redis | Incident queue, dedup window, audit log |
-| K8s Automation | kubernetes-python-client | rollout restart, scale |
-| ArgoCD | ArgoCD REST API | Rollback to previous revision |
-| UI | Next.js 14 + Tailwind | Operator dashboard, Vercel-deployed |
-| Security | RBAC, NetworkPolicies, Trivy | Least-privilege, zero-trust, image scanning |
-
----
-
-## Quick Start — Local Development
-
-### Prerequisites
-
-| Tool | Version |
-|------|---------|
-| Docker Desktop | 24.x+ |
-| Python | 3.11+ |
-| Node.js | 20 LTS |
-| kubectl | 1.29+ |
-| Helm | 3.x |
-
-### 1 — Clone and configure
+## Quick start
 
 ```bash
 git clone https://github.com/adirathoreudr/aiops-incident-commander.git
 cd aiops-incident-commander
 
-# Copy env template and fill in your OpenAI API key
-cp .env.example .env
-# Edit .env — set OPENAI_API_KEY at minimum
+echo "OPENAI_API_KEY=sk-..." > .env      # or ANTHROPIC_API_KEY + LLM_MODEL=claude-...
+
+docker compose up -d
 ```
 
-### 2 — Start the full local stack
+Dashboard at **http://localhost:3001**. Compose supplies development API tokens,
+so there is nothing else to configure locally.
+
+Inject an incident and watch the loop run:
 
 ```bash
-# Builds collector, agent, executor images and spins up
-# Redis, Prometheus, Loki, Alertmanager, Grafana + all services
-docker compose up -d
-
-# Tail logs
-docker compose logs -f agent collector executor
+./scripts/simulate.sh crashloop
+docker compose logs -f agent executor
 ```
-
-Services available at:
 
 | Service | URL |
 |---------|-----|
-| Collector API | http://localhost:8000 |
-| Agent API | http://localhost:8001 |
-| Executor API | http://localhost:8002 |
-| Prometheus | http://localhost:9090 |
-| Alertmanager | http://localhost:9093 |
-| Loki | http://localhost:3100 |
-| Grafana | http://localhost:3000 (admin / aiops) |
+| Dashboard | http://localhost:3001 |
+| Collector / Agent / Executor | :8000 / :8001 / :8002 |
+| Prometheus / Alertmanager / Loki | :9090 / :9093 / :3100 |
+| Grafana | :3000 (admin / aiops) |
 
-### 3 — Open the UI
-
-`docker compose up -d` already started it at **http://localhost:3001**.
-
-To run it outside compose:
-
-```bash
-cd ui
-npm install
-COLLECTOR_URL=http://localhost:8000 \
-EXECUTOR_URL=http://localhost:8002 \
-COLLECTOR_API_TOKEN=dev-collector-token \
-EXECUTOR_API_TOKEN=dev-executor-token \
-npm run dev
-```
-
-> The dashboard always reads from the collector — there is no demo mode. It
-> proxies through its own API routes (`src/pages/api/`) rather than calling the
-> services directly, so the API tokens stay server-side and never reach the
-> browser. That is why these variables have no `NEXT_PUBLIC_` prefix: Next would
-> inline them into the client bundle, where anyone could read them.
-
-### 4 — Inject a simulated incident
-
-```bash
-# CrashLoopBackOff scenario
-curl -X POST http://localhost:8000/webhook/simulate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "CrashLoopBackOff — payments-api",
-    "alertname": "KubePodCrashLooping",
-    "severity": "critical",
-    "namespace": "staging",
-    "service": "payments-api",
-    "deployment": "payments-api",
-    "pod": "payments-api-7d9f84-xk2pq",
-    "image_tag": "payments-api:v2.4.0"
-  }'
-
-# Returns: {"incident_id": "inc-xxxx", "status": "enqueued"}
-```
-
-Watch the agent reason:
-
-```bash
-docker compose logs -f agent
-# You will see:
-#   Reasoning over incident inc-xxxx
-#   LLM responded (842 chars)
-#   Enqueued incident for auto-execution / requires approval
-```
+The dashboard reads from the collector — there is no demo dataset. An empty feed
+means no incidents; the header reads `DISCONNECTED` if the collector is
+unreachable.
 
 ---
 
-## Cloud Deployment (AWS EKS)
+## How it works
 
-### 1 — Provision infrastructure
-
-```bash
-cd infra/terraform
-
-# Initialise — creates S3 backend bucket first if needed
-terraform init
-
-# Preview
-terraform plan -out plan.tfplan \
-  -var="environment=dev" \
-  -var="cluster_name=aiops-incident-commander"
-
-# Apply (≈12-15 min for EKS)
-terraform apply plan.tfplan
-
-# Configure kubectl
-aws eks update-kubeconfig \
-  --name aiops-incident-commander \
-  --region us-east-1
+```
+Alertmanager ─► collector ─► agent ─► policy gate ─► executor ─► Kubernetes
+                    │           │          │             │
+                 dedup +     LLM +      allowlist     verify
+                 Loki logs   runbooks   + confidence   recovery
+                    └───────────── audit trail ────────────┘
 ```
 
-### 2 — Install observability stack
+1. **Collect** — normalise the Alertmanager payload, fingerprint it to
+   deduplicate related alerts into one incident, attach the last 15 minutes of
+   Loki logs and recent rollout history.
+2. **Reason** — retrieve similar past incidents and runbooks, prompt the LLM with
+   the evidence, parse a typed hypothesis with a confidence score. Unparseable
+   output falls back to `notify_only` with confidence 0.
+3. **Gate** — the policy engine returns `ALLOW`, `REQUIRE_APPROVAL` or `BLOCK`.
+   Approval relaxes only the rules that exist to summon a human; the allowlist
+   and blocked namespaces hold regardless of who approves.
+4. **Execute** — patch the deployment via the Kubernetes API, then poll until it
+   is healthy or the timeout expires.
+5. **Record** — every step is appended to a Redis list, atomically, so the agent
+   and executor cannot overwrite each other.
 
-```bash
-# Add Helm repos
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana https://grafana.github.io/helm-charts
-helm repo update
+Services communicate through Redis (queues, dedup window, incident state, audit).
 
-# kube-prometheus-stack (Prometheus + Alertmanager + Grafana)
-helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-  --namespace monitoring --create-namespace \
-  --set alertmanager.config.global.resolve_timeout=5m
-
-# Loki stack
-helm install loki grafana/loki-stack \
-  --namespace monitoring \
-  --set grafana.enabled=false \
-  --set promtail.enabled=true
-```
-
-### 3 — Create secrets
-
-```bash
-kubectl create secret generic aiops-secrets -n aiops \
-  --from-literal=openai-api-key="$OPENAI_API_KEY" \
-  --from-literal=argocd-token="$ARGOCD_TOKEN" \
-  --from-literal=executor-api-token="$(openssl rand -hex 32)" \
-  --from-literal=collector-api-token="$(openssl rand -hex 32)"
-```
-
-The secret is created out of band and is **not** part of `kubectl apply -k .`.
-A Secret carrying `REPLACE_ME` placeholders used to live inside the platform
-manifest, so every deploy overwrote the real credentials and the agent came back
-up holding the literal string. See `manifests/secret.example.yaml` for the key
-names, or have external-secrets-operator manage it.
-
-`executor-api-token` is required: without it the executor refuses every
-remediation request.
-
-### 4 — Deploy AIOps platform
-
-```bash
-# Prometheus alert rules and AI-triage routing. These live in the monitoring
-# namespace, so they are applied separately from the platform kustomization.
-# alertmanager-config.yaml is an AlertmanagerConfig CR and needs the Prometheus
-# Operator CRDs; the file carries a Helm values equivalent if you are not
-# running the operator.
-kubectl apply -f manifests/monitoring/prometheus-rules.yaml
-kubectl apply -f manifests/monitoring/alertmanager-config.yaml
-
-# Alertmanager needs the collector token to reach the webhook once you have set
-# COLLECTOR_API_TOKEN, or ingestion fails silently.
-kubectl create secret generic alertmanager-aiops-token -n monitoring \
-  --from-literal=token="$COLLECTOR_API_TOKEN"
-
-# Core services. Apply through kustomize from the repo root — it generates the
-# knowledge-base ConfigMaps the agent mounts (without them the agent pod never
-# leaves ContainerCreating) and resolves the image placeholders.
-export ECR_REGISTRY=$(terraform -chdir=infra/terraform output -raw ecr_collector_url | cut -d/ -f1)
-for svc in collector agent executor; do
-  kustomize edit set image \
-    "REPLACE_WITH_ECR_URL/aiops-incident-commander/$svc=${ECR_REGISTRY}/aiops-incident-commander/$svc:latest"
-done
-kubectl apply -k .
-
-# Verify
-kubectl get pods -n aiops
-# NAME                               READY   STATUS    RESTARTS
-# aiops-agent-xxxx                   1/1     Running   0
-# aiops-collector-xxxx               1/1     Running   0
-# aiops-executor-xxxx                1/1     Running   0
-# redis-xxxx                         1/1     Running   0
-```
-
-### 5 — Deploy UI to Vercel
-
-```bash
-cd ui
-npm install -g vercel
-vercel --prod
-
-# Set these as Vercel *server-side* environment variables (no NEXT_PUBLIC_
-# prefix — the tokens must not reach the browser):
-#   COLLECTOR_URL        https://collector.your-domain.com
-#   EXECUTOR_URL         https://executor.your-domain.com
-#   COLLECTOR_API_TOKEN  matching the cluster secret
-#   EXECUTOR_API_TOKEN   matching the cluster secret
-#
-# Both URLs come from the Ingress in manifests/aiops-platform.yaml — update the
-# hostnames there first.
-```
+**Stack:** Python 3.11 · FastAPI · LangChain · FAISS · Redis · Next.js 14 ·
+Kubernetes · ArgoCD · Terraform · Prometheus/Loki/Grafana · GitHub Actions.
 
 ---
 
-## Demo Walkthrough (5 Minutes)
+## Policy engine
 
-This is the scripted failure scenario that demonstrates the full AIOps loop.
+Only these actions can ever be dispatched. Anything else is refused before it
+reaches the cluster.
 
-### Step 1 — Inject a crash loop (30 seconds)
+| Action | Auto-execute | Notes |
+|--------|--------------|-------|
+| `rollout_restart` | ✓ conf ≥ 0.75 | Zero-downtime rolling restart |
+| `scale_up` | ✓ conf ≥ 0.75 | Reversible, capped at 20 replicas |
+| `scale_down` | ✗ approval | May shed capacity mid-incident |
+| `argocd_rollback` | ✗ approval | State mutation |
+| `notify_only` | ✓ always | No cluster changes |
 
-```bash
-# Using the GitHub Actions manual workflow:
-gh workflow run simulate-incident.yml \
-  -f scenario=crashloop \
-  -f namespace=staging
-
-# Or directly via curl (local or cluster):
-curl -X POST $COLLECTOR_URL/webhook/simulate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "CrashLoopBackOff — payments-api after v2.4.0 deploy",
-    "alertname": "KubePodCrashLooping",
-    "severity": "critical",
-    "namespace": "staging",
-    "service": "payments-api",
-    "deployment": "payments-api",
-    "pod": "payments-api-7d9f84-xk2pq",
-    "image_tag": "payments-api:v2.4.0"
-  }'
-```
-
-### Step 2 — Alert arrives in collector (< 5 seconds)
-
-The collector:
-- Normalises the Alertmanager payload
-- Pulls last 15 min of logs from Loki
-- Fetches rollout history from executor metadata API
-- Creates an `IncidentContext` object
-- Pushes incident ID to Redis queue
-
-### Step 3 — Agent reasons (≈ 15–20 seconds)
-
-Open the dashboard → **INCIDENTS** → click the new incident.
-
-You will see the AI analysis populate:
-
-```
-INCIDENT TYPE:   crash_loop
-CONFIDENCE:      94%
-ROOT CAUSE:      v2.4.0 introduced a missing STRIPE_API_VERSION
-                 environment variable. Application panics on startup
-                 at config validation. Evidence: restart count 7 in
-                 4 minutes, log line "FATAL: required env var
-                 STRIPE_API_VERSION not set" in all 7 crash cycles.
-
-EVIDENCE:
-  › Log: 'FATAL: required env var STRIPE_API_VERSION not set'
-  › Rollout: payments-api image changed to v2.4.0 at 14:32 UTC
-  › Alert: KubePodCrashLooping fired 90s after deploy
-
-RECOMMENDED ACTION:   RESTART  ⏸ AWAITING APPROVAL
-```
-
-### Step 4 — Approve or auto-execute
-
-Because the incident is in the `staging` namespace with confidence 0.94 ≥ 0.75, the policy engine would allow auto-execution for `rollout_restart`. For the demo, `requires_approval` is set to `true` to show the approval gate.
-
-Click **✓ APPROVE** in the dashboard. The executor:
-
-```
-✓ Rollout restart triggered: staging/payments-api
-✓ Recovery confirmed in 67 seconds (3/3 replicas ready)
-STATUS: RESOLVED
-```
-
-### Step 5 — Review audit trail
-
-Click **AUDIT** tab on the incident. Every step is recorded:
-
-```
-10:00:01  AI REASONED     type=crash_loop  conf=94%  → rollout_restart  ⏸ needs approval
-10:00:03  APPROVAL        APPROVED by operator@demo  action=rollout_restart
-10:00:04  ACTION          rollout_restart  staging/payments-api  by executor  ✓ SUCCESS
-```
-
----
-
-## API Reference
-
-### Collector (`:8000`)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/healthz` | — | Health check |
-| `GET` | `/metrics` | — | Prometheus metrics |
-| `POST` | `/webhook/alertmanager` | if token set | Alertmanager webhook receiver |
-| `POST` | `/webhook/simulate` | **required** | Inject synthetic incident |
-| `GET` | `/incidents` | if token set | Recent incidents, newest first |
-| `GET` | `/incidents/{id}` | if token set | Get incident by ID |
-
-### Agent (`:8001`)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/healthz` | Health check |
-| `GET` | `/metrics` | Prometheus metrics |
-| `POST` | `/reason/{id}` | Manually trigger reasoning |
-| `GET` | `/audit/{id}` | Audit log for incident (`{"entries": [...]}`) |
-
-### Executor (`:8002`)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/healthz` | — | Health check |
-| `GET` | `/metrics` | — | Prometheus metrics |
-| `POST` | `/approve` | **required** | Approve or reject a pending action |
-| `POST` | `/execute/manual` | **required** | Operator-initiated action |
-| `GET` | `/audit` | if token set | Audit entries across all incidents |
-| `GET` | `/incidents/{id}/audit` | if token set | Audit trail for one incident |
-| `GET` | `/meta/rollout-history` | — | Deployment rollout history |
-| `GET` | `/meta/deployments` | — | List deployments in namespace |
-| `GET` | `/meta/namespaces` | — | List non-system namespaces |
+- **Blocked namespaces** — `kube-system`, `kube-public`, `cert-manager`. No
+  approval unlocks these.
+- **High-risk namespaces** — `production`, `prod` require confidence ≥ 0.90.
+- **Scale bounds** — replicas clamped to `[1, 20]`.
+- **Defence in depth** — RBAC binds remediation writes per-namespace, so the
+  executor cannot patch a namespace nobody granted it even if the policy engine
+  has a bug.
 
 ---
 
 ## Authentication
 
-The executor patches live deployments, so the endpoints that reach it require a
-bearer token. Generate one per environment:
-
-```bash
-openssl rand -hex 32
-```
+The executor patches live deployments, so the paths that reach it need a bearer
+token. Generate one per environment with `openssl rand -hex 32`.
 
 | Variable | Guards | If unset |
 |----------|--------|----------|
-| `EXECUTOR_API_TOKEN` | `POST /approve`, `POST /execute/manual` | **Fails closed** — every request is refused with 503 |
-| `COLLECTOR_API_TOKEN` | `POST /webhook/simulate`; also `/webhook/alertmanager` and the read endpoints once set | `simulate` refused; alert ingestion stays open |
+| `EXECUTOR_API_TOKEN` | `POST /approve`, `POST /execute/manual` | **Fails closed** — 503 on every request |
+| `COLLECTOR_API_TOKEN` | `POST /webhook/simulate`; also `/webhook/alertmanager` and reads once set | `simulate` refused; ingestion stays open |
 
-**The executor fails closed on purpose.** Treating "no token configured" as "no
-checks" would leave an unauthenticated cluster-mutation endpoint in every
-deployment that forgot to set one — silently, which is the worst way to leave it.
-An unconfigured executor still ingests, reasons and reports; it just cannot act,
-and it says so at startup and in the response body.
+**The executor fails closed deliberately.** Treating "no token" as "no checks"
+would leave an unauthenticated cluster-mutation endpoint in every deployment that
+forgot to configure one. An unconfigured executor still ingests, reasons and
+reports — it just cannot act.
 
-`/webhook/alertmanager` is the deliberate exception: Alertmanager needs matching
-config to send a credential, and a platform that silently stops seeing
-production alerts is worse than one with an open ingest path. Once you set
-`COLLECTOR_API_TOKEN`, configure Alertmanager to match:
+`/webhook/alertmanager` is the exception: Alertmanager needs matching config to
+send a credential, and a platform that silently stops seeing production alerts is
+worse than an open ingest path. Once `COLLECTOR_API_TOKEN` is set, configure
+Alertmanager to match:
 
 ```yaml
 webhook_configs:
   - url: http://aiops-collector:8000/webhook/alertmanager
     http_config:
-      authorization:
-        type: Bearer
-        credentials_file: /etc/alertmanager/secrets/collector-token
+      authorization: { type: Bearer, credentials_file: /etc/alertmanager/secrets/collector-token }
 ```
 
-`/healthz` and `/metrics` are never authenticated — liveness probes and
-Prometheus scrapes carry no credentials.
+`/healthz` and `/metrics` are never authenticated — probes and scrapes carry no
+credentials. Browser origins are restricted via `CORS_ALLOWED_ORIGINS`.
 
-Browser origins are restricted via `CORS_ALLOWED_ORIGINS` (comma-separated,
-defaults to `http://localhost:3001`). All three services previously ran with
-`allow_origins=["*"]`.
+The dashboard proxies through its own API routes (`ui/src/pages/api/`) rather
+than calling the services directly, so tokens stay server-side. That is why they
+have no `NEXT_PUBLIC_` prefix — Next would inline them into the client bundle.
 
 ---
 
-## Policy Engine
+## API
 
-The executor enforces a strict allowlist. Only these action types can ever be called:
+**Collector `:8000`**
 
-| Action | Risk | Auto-execute | Notes |
-|--------|------|-------------|-------|
-| `rollout_restart` | Low | ✓ (conf ≥ 0.75) | Zero-downtime rolling restart |
-| `scale_up` | Low | ✓ (conf ≥ 0.75) | Reversible, max 20 replicas |
-| `scale_down` | Medium | ✗ always approval | May reduce capacity |
-| `argocd_rollback` | Medium | ✗ always approval | State mutation |
-| `notify_only` | None | ✓ always | No cluster changes |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/webhook/alertmanager` | if token set | Alertmanager receiver |
+| `POST` | `/webhook/simulate` | **required** | Inject a synthetic incident |
+| `GET` | `/incidents` | if token set | Recent incidents, newest first |
+| `GET` | `/incidents/{id}` | if token set | One incident |
 
-Additional rules:
-- **Blocked namespaces**: `kube-system`, `kube-public`, `cert-manager` — zero automated actions
-- **High-risk namespaces**: `production`, `prod` — confidence threshold raised to 0.90
-- **Confidence gate**: actions below threshold route to human approval queue
-- **Scale bounds**: replicas clamped to `[1, 20]`
+**Agent `:8001`** — `POST /reason/{id}` (re-queue), `GET /audit/{id}`.
 
----
+**Executor `:8002`**
 
-## Runbook Library
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/approve` | **required** | Approve or reject a pending action |
+| `POST` | `/execute/manual` | **required** | Operator-initiated action |
+| `GET` | `/audit` | if token set | Audit entries across all incidents |
+| `GET` | `/incidents/{id}/audit` | if token set | Audit trail for one incident |
+| `GET` | `/meta/*` | — | Rollout history, deployments, namespaces |
 
-| ID | Alert | Action |
-|----|-------|--------|
-| `rb-001` | KubePodCrashLooping | `rollout_restart` |
-| `rb-002` | KubeContainerOOMKilled | `scale_up` |
-| `rb-003` | HighResponseTime | `scale_up` |
-| `rb-004` | HighErrorRate after deploy | `argocd_rollback` |
-| `rb-005` | KubeNodeMemoryPressure | `notify_only` |
-
-Add new runbooks by dropping a JSON file into `knowledge-base/runbooks/`.  
-The agent reloads on next restart. Set `USE_EMBEDDINGS=true` to enable FAISS semantic search.
+All three expose `/healthz` and `/metrics`.
 
 ---
 
-## Security Design
+## Configuration
 
-```
-┌──────────────────────────────────────────────────────┐
-│  IAM IRSA — agent pod has scoped S3 role only        │
-│  Kubernetes RBAC — each service has own SA           │
-│    collector: get/list/watch pods, events, nodes     │
-│    executor:  patch deployments (no delete/create)   │
-│    agent:     get configmaps in aiops namespace only │
-│  NetworkPolicy — default deny-all + explicit allows  │
-│  Secrets — never in code; K8s Secret + .env.example  │
-│  Images — multi-stage, non-root UID 1000, Trivy scan │
-│  Pod Security — restricted profile on aiops NS       │
-└──────────────────────────────────────────────────────┘
-```
-
-Key principles:
-- **No wildcards** in RBAC — every verb is explicit
-- **Agent has no tools at all** — reasoning is a single LLM call with a fixed
-  prompt. It returns a recommendation; it cannot invoke anything. The action it
-  names is then checked against the policy allowlist before any execution.
-- **Audit is append-only** — entries are RPUSHed to a Redis list, so the two
-  services writing concurrently cannot overwrite each other. It is a property
-  of the data structure, not a convention.
-- **Secrets are never logged deliberately** — no credential is passed to a log
-  call anywhere in the codebase. There is no redaction filter, so this is a
-  property of the current code rather than an enforced guarantee; a future log
-  line could break it without anything failing.
-- **Policy engine is stateless** — no way to mutate allowlist at runtime
-
----
-
-## Running Tests
-
-```bash
-# Install test dependencies
-pip install pytest pytest-asyncio pytest-cov httpx
-
-# All services
-pytest collector/tests/ agent/tests/ executor/tests/ \
-  -v --cov --cov-report=term-missing
-
-# Just the policy engine (fastest safety check)
-pytest executor/tests/test_policy.py -v
-
-# Example output:
-# test_unknown_action_blocked          PASSED
-# test_kube_system_blocked             PASSED
-# test_scale_down_always_needs_approval PASSED
-# test_low_confidence_blocked_non_prod  PASSED
-# test_high_risk_namespace_needs_higher_confidence PASSED
-# 139 passed
-```
-
----
-
-## CI/CD Pipeline
-
-```
-push / PR
-   │
-   ├── lint (ruff + eslint + tsc)
-   │
-   ├── test (pytest — collector, agent, executor)
-   │       └── Redis service container
-   │
-   ├── ui-build (next build — verifies no TypeScript errors)
-   │
-   ├── manifests
-   │     ├── kubectl kustomize .            (render)
-   │     ├── kubeconform -strict            (schema)
-   │     └── scripts/validate_manifests.py  (Pod Security + no committed Secret)
-   │
-   └── build (matrix: collector, agent, executor)
-         ├── docker buildx build --load
-         ├── Trivy HIGH/CRITICAL → GitHub Security tab
-         └── push to ECR (main only, when AWS is configured)
-
-main branch merge (after CI passes):
-   │
-   ├── deploy EKS
-   │     ├── kustomize edit set image  (fails loudly on a bad reference)
-   │     ├── re-run manifest validation on the rendered output
-   │     ├── kubectl apply             (creates or updates in one pass)
-   │     ├── kubectl rollout status --timeout=300s
-   │     └── smoke test healthz endpoints
-   │
-   └── deploy Vercel (UI → production)
-```
-
-Images are scanned **before** they are pushed, not after — otherwise a CRITICAL
-finding is already in the registry and possibly already deployed.
-
-Manifest validation exists because schema validity is not deployability: every
-Deployment in this repo was once schema-valid *and* rejected at admission for
-omitting what the `restricted` Pod Security profile requires.
-`scripts/validate_manifests.py` checks the profile and refuses a Secret in the
-applied set, and CD re-runs it against exactly what it is about to apply.
-
----
-
-## Environment Variables
-
-See [`.env.example`](.env.example) for the full list. Required at minimum:
+Full list in [`.env.example`](.env.example). Required:
 
 | Variable | Description |
 |----------|-------------|
 | `OPENAI_API_KEY` | LLM credential (or `ANTHROPIC_API_KEY` + a `claude-*` `LLM_MODEL`) |
-| `EXECUTOR_API_TOKEN` | Required — the executor refuses all remediation without it |
-| `REDIS_URL` | Redis connection string |
-| `LOKI_URL` | Loki API base URL |
+| `EXECUTOR_API_TOKEN` | Without it the executor refuses all remediation |
+| `REDIS_URL`, `LOKI_URL` | Backing services |
 
-Optional but recommended:
+Worth knowing:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_MODEL` | `gpt-4o-mini` | OpenAI model (cheaper models work fine) |
-| `AUTO_EXECUTE_THRESHOLD` | `0.75` | Min confidence for auto-execution |
-| `USE_EMBEDDINGS` | `true` | Enable FAISS semantic search. Needs `OPENAI_API_KEY` even when the reasoning model is Anthropic, since embeddings come from OpenAI; without it the store logs a warning and falls back to keyword matching |
-| `COLLECTOR_API_TOKEN` | — | Guards `/webhook/simulate`, and everything else once set |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:3001` | Browser origins permitted to call the services |
-| `ARGOCD_CA_BUNDLE` | — | CA for a self-signed ArgoCD. TLS verification is on; do not disable it |
-| `INCIDENT_TTL_SECONDS` | `3600` | How long an incident is retained |
-| `ARGOCD_TOKEN` | — | Required for rollback actions |
+| `AUTO_EXECUTE_THRESHOLD` | `0.75` | Minimum confidence for unattended execution |
+| `INCIDENT_TTL_SECONDS` | `3600` | Incident retention (audit is kept 30 days) |
+| `USE_EMBEDDINGS` | `true` | FAISS semantic search. Needs `OPENAI_API_KEY` even with an Anthropic model, since embeddings come from OpenAI; otherwise it logs a warning and falls back to keyword matching |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3001` | Permitted browser origins |
+| `ARGOCD_TOKEN` / `ARGOCD_CA_BUNDLE` | — | Required for rollback. TLS verification is on; point the bundle at your CA rather than disabling it |
 
 ---
 
-## Extending the Platform
+## Deploying to EKS
 
-### Add a new runbook
+```bash
+# 1. Infrastructure (~15 min)
+cd infra/terraform && terraform init && terraform apply
 
-```json
-// knowledge-base/runbooks/rb-006-your-alert.json
-{
-  "id": "rb-006",
-  "title": "Your Alert Name",
-  "summary": "One-line description of what this alert means",
-  "trigger_signals": ["alert: YourAlertName"],
-  "likely_causes": ["Cause A", "Cause B"],
-  "action": "rollout_restart",
-  "tags": ["tag1", "tag2"]
-}
+# 2. Observability
+helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
+helm install loki grafana/loki-stack -n monitoring --set grafana.enabled=false
+
+# 3. Secrets — created out of band, never part of `apply`
+kubectl create secret generic aiops-secrets -n aiops \
+  --from-literal=openai-api-key="$OPENAI_API_KEY" \
+  --from-literal=executor-api-token="$(openssl rand -hex 32)" \
+  --from-literal=collector-api-token="$(openssl rand -hex 32)"
+
+# 4. Platform — kustomize generates the knowledge-base ConfigMaps and
+#    resolves image references. Applying the raw manifests skips both.
+for svc in collector agent executor; do
+  kustomize edit set image \
+    "REPLACE_WITH_ECR_URL/aiops-incident-commander/$svc=$ECR_REGISTRY/aiops-incident-commander/$svc:latest"
+done
+kubectl apply -k .
+
+# 5. Alert routing
+kubectl apply -f manifests/monitoring/
+kubectl create secret generic alertmanager-aiops-token -n monitoring \
+  --from-literal=token="$COLLECTOR_API_TOKEN"
 ```
 
-### Add a new safe action
+Before your first deploy, update the Ingress hostnames in
+`manifests/aiops-platform.yaml`, and note that RBAC binds remediation writes to
+the **`staging` namespace only** — copy that RoleBinding into any other namespace
+you want remediated. See [`manifests/secret.example.yaml`](manifests/secret.example.yaml)
+for the full set of secret keys.
 
-1. Add the action name to `ALLOWED_ACTIONS` in `executor/policy.py`
-2. Implement `_your_action()` in `executor/actions.py`
-3. Add it to the `dispatch` dict in `ActionDispatcher.execute()`
-4. Add the action to the LLM system prompt allowlist in `agent/prompts/incident_prompt.py`
-5. Write a policy test for the new action in `executor/tests/test_policy.py`
+The UI deploys to Vercel with `COLLECTOR_URL`, `EXECUTOR_URL`,
+`COLLECTOR_API_TOKEN` and `EXECUTOR_API_TOKEN` as **server-side** environment
+variables (no `NEXT_PUBLIC_` prefix).
 
-### Connect a different LLM
+---
 
-Set `LLM_MODEL` to any OpenAI-compatible model string, or swap `ChatOpenAI` in `agent/reasoner.py` for any LangChain-supported chat model (Anthropic, Ollama, Mistral, etc.).
+## Development
+
+```bash
+pytest                                    # 142 tests
+ruff check collector/ agent/ executor/
+cd ui && npm run type-check && npm run build
+
+# Kubernetes manifests — no cluster required
+kubectl kustomize . > /tmp/rendered.yaml
+kubeconform -strict -kubernetes-version 1.29.0 /tmp/rendered.yaml
+python scripts/validate_manifests.py /tmp/rendered.yaml
+```
+
+`validate_manifests.py` exists because schema validity is not deployability:
+every Deployment here was once schema-valid *and* rejected at admission for
+omitting what the `restricted` Pod Security profile requires. It also refuses a
+Secret in the applied set, since applying one overwrites real credentials.
+
+CI runs lint → test → ui-build → manifest validation → build. Images are scanned
+with Trivy **before** being pushed, so a CRITICAL finding never reaches the
+registry.
+
+**Add a runbook** — drop a JSON file into `knowledge-base/runbooks/`. Kustomize
+hashes the contents, so the agent rolls automatically.
+
+**Add an action** — allowlist it in `executor/policy.py`, implement it in
+`executor/actions.py`, add it to the dispatch table and the prompt in
+`agent/prompts/incident_prompt.py`, and write a policy test.
+
+---
+
+## Design targets
+
+| Metric | Target |
+|--------|--------|
+| MTTR reduction | ≥ 50% |
+| Alert noise cut via dedup + grouping | ≥ 40% |
+| Auto-resolved without shell access | ≥ 60% |
+| Triage latency (alert → hypothesis) | < 30s |
+
+These are goals, **not measurements** — no benchmark harness exists in this
+repository. What is verified is the test suite and CI: the loop has been
+exercised end to end against real services (Alertmanager webhook → dedup →
+approval → execution → audit), and the manifests are schema- and
+policy-validated on every push.
+
+**This is production-ready, not production-proven.** It has never handled a real
+incident on a real cluster. Point it at a staging namespace first.
 
 ---
 
 ## Roadmap
 
-- [ ] Prometheus metric ingestion (the schema has `MetricSample`; nothing populates it)
-- [ ] A real benchmark harness, so the targets above can become measurements
-- [ ] SSO/OIDC on the approval flow (currently a shared bearer token)
-- [ ] Shared package for the duplicated `audit.py` / `cors.py` (each service builds
-      from its own Docker context and cannot import from the others)
-- [ ] Slack / PagerDuty notification integration
-- [ ] Multi-cluster support (fleet view across EKS clusters)
-- [ ] ChromaDB persistent vector store (replace in-memory FAISS)
-- [ ] Grafana annotation push on incident open/close
-- [ ] KEDA-based autoscaling integration for capacity incidents
-- [ ] Webhook for external approval (Slack approval buttons)
-- [ ] Postmortem report generation (Markdown export)
-- [ ] Cost-aware scaling recommendations
+- Prometheus metric ingestion — the schema has `MetricSample`; nothing populates
+  it, and the prompt tells the model not to cite metrics for that reason
+- A benchmark harness, so the targets above can become measurements
+- SSO/OIDC on the approval flow (currently a shared bearer token)
+- Shared package for the duplicated `audit.py` / `cors.py` — each service builds
+  from its own Docker context and cannot import from the others
+- Slack / PagerDuty notifications, multi-cluster fleet view, postmortem export
 
----
-
-## Project Background
-
-Built as a portfolio project demonstrating:
-
-- **Kubernetes operations** — EKS, RBAC, NetworkPolicies, rollout management
-- **Observability** — Prometheus, Loki, Alertmanager, structured incident data
-- **AI agents** — LangChain, OpenAI, retrieval-augmented generation, structured outputs
-- **Safe automation** — policy engines, approval gates, confidence thresholds
-- **DevOps engineering** — Terraform IaC, multi-stage Docker, GitHub Actions CI/CD
-- **Production-grade code** — typed schemas, audit logging, test coverage, clean architecture
+See [`docs/DEMO.md`](docs/DEMO.md) for a scripted walkthrough and
+[`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) for
+component detail.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
-
----
-
-<div align="center">
-
-Built with ❤️ by Me who just likes to solve real-world problems and is fed up of late night constant alerts;)
-
-**[⭐ Star on GitHub](https://github.com/adirathoreudr/aiops-incident-commander)**
-
-</div>
+MIT — see [LICENSE](LICENSE).
